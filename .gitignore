@@ -1,0 +1,31 @@
+# Environment Variables
+.env
+.env.*
+
+# Virtual Environment
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite3
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Sellercloud Data
+purchase_orders.json
