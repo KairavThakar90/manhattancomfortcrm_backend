@@ -1,2 +1,35 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+.Python
+
+# dotenv secrets
+.env
+
+# Python packaging
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# Editor files
+.vscode/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
