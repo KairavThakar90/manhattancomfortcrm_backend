@@ -39,6 +39,13 @@ def list_purchase_orders(
         .all()
     )
     
+    # Convert to Pydantic models BEFORE converting to dicts
+    # This ensures model_validate can access container_links
+    po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
+    
+    # Now convert to dicts
+    results = [po.model_dump(mode='python') for po in po_models]
+    
     # Build response with meta object
     return {
         "total": total,
@@ -52,7 +59,7 @@ def list_purchase_orders(
             "has_next": page * page_size < total,
             "has_prev": page > 1
         },
-        "results": [PurchaseOrderOut.model_validate(r).model_dump() for r in rows],
+        "results": results,
     }
 
 

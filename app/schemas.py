@@ -171,7 +171,15 @@ class PurchaseOrderOut(BaseModel):
     @classmethod
     def model_validate(cls, obj, **kwargs):
         """Override to compute totals when validating from ORM"""
+        # First, manually validate items to ensure containers are loaded
+        validated_items = []
+        if hasattr(obj, 'items') and obj.items:
+            for item in obj.items:
+                validated_items.append(PurchaseOrderItemOut.model_validate(item))
+        
+        # Now validate the PO, but replace items with our pre-validated ones
         instance = super().model_validate(obj, **kwargs)
+        instance.items = validated_items
         
         # Calculate totals from items
         if instance.items:
