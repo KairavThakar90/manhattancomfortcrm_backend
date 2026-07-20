@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field
 
 
 # ---------- Auth ----------
@@ -189,11 +189,11 @@ class PaginatedResponse(BaseModel):
     page_size: int
     results: list
     
-    def model_dump(self, **kwargs):
-        """Override to add meta object during serialization"""
-        data = super().model_dump(**kwargs)
-        # Add meta object
-        data['meta'] = {
+    @computed_field
+    @property
+    def meta(self) -> dict:
+        """Computed meta object with pagination info"""
+        return {
             "total": self.total,
             "page": self.page,
             "page_size": self.page_size,
@@ -201,7 +201,6 @@ class PaginatedResponse(BaseModel):
             "has_next": self.page * self.page_size < self.total,
             "has_prev": self.page > 1
         }
-        return data
 
 
 class SyncResponse(BaseModel):

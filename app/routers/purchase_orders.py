@@ -14,7 +14,7 @@ from app.services.sync_service import sync_purchase_orders, sync_containers
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
 
 
-@router.get("", response_model=PaginatedResponse)
+@router.get("")
 def list_purchase_orders(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
@@ -38,12 +38,22 @@ def list_purchase_orders(
         .limit(page_size)
         .all()
     )
-    return PaginatedResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
-        results=[PurchaseOrderOut.model_validate(r) for r in rows],
-    )
+    
+    # Build response with meta object
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "meta": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0,
+            "has_next": page * page_size < total,
+            "has_prev": page > 1
+        },
+        "results": [PurchaseOrderOut.model_validate(r).model_dump() for r in rows],
+    }
 
 
 @router.get("/{po_id}", response_model=PurchaseOrderOut)
@@ -101,15 +111,23 @@ def get_pos_missing_invoice(
         .all()
     )
     
-    return PaginatedResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
-        results=[PurchaseOrderOut.model_validate(r) for r in rows],
-    )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "meta": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0,
+            "has_next": page * page_size < total,
+            "has_prev": page > 1
+        },
+        "results": [PurchaseOrderOut.model_validate(r).model_dump() for r in rows],
+    }
 
 
-@router.get("/flags/overdue-containers", response_model=PaginatedResponse)
+@router.get("/flags/overdue-containers")
 def get_overdue_containers(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
@@ -166,12 +184,20 @@ def get_overdue_containers(
     end = start + page_size
     paginated_pos = overdue_pos[start:end]
     
-    return PaginatedResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
-        results=[PurchaseOrderOut.model_validate(r) for r in paginated_pos],
-    )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "meta": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0,
+            "has_next": page * page_size < total,
+            "has_prev": page > 1
+        },
+        "results": [PurchaseOrderOut.model_validate(r).model_dump() for r in paginated_pos],
+    }
 
 
 @router.post("/sync", response_model=SyncResponse)
