@@ -153,6 +153,8 @@ class ShippingContainer(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sellercloud_container_id = Column(Integer, unique=True, index=True)
     container_name = Column(String(255))
+    estimated_arrival_date = Column(DateTime(timezone=True))  # ETA from SellerCloud
+    received_date = Column(DateTime(timezone=True))  # Actual received date from SellerCloud
     raw_json = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)

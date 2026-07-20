@@ -104,6 +104,8 @@ class ContainerSummary(BaseModel):
     id: uuid.UUID
     sellercloud_container_id: Optional[int] = None
     container_name: Optional[str] = None
+    estimated_arrival_date: Optional[datetime] = None  # Container ETA
+    received_date: Optional[datetime] = None  # Actual received date
     qty_in_container: int = 0
 
 
@@ -137,6 +139,8 @@ class PurchaseOrderItemOut(BaseModel):
                         id=link.container.id,
                         sellercloud_container_id=link.container.sellercloud_container_id,
                         container_name=link.container.container_name,
+                        estimated_arrival_date=link.container.estimated_arrival_date,
+                        received_date=link.container.received_date,
                         qty_in_container=link.qty_in_container
                     ))
             instance.containers = containers

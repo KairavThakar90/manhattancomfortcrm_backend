@@ -6,12 +6,22 @@ from app.routers import auth, companies, customers, vendors, purchase_orders
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
 
+# CORS configuration for production and development
+# Allows requests from Vercel deployments and localhost
+origins = [
+    settings.FRONTEND_ORIGIN,
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://manhattancomfortcrm.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN, "http://localhost:3000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"https://manhattancomfortcrm.*\.vercel\.app",  # Allow all Vercel preview deployments
 )
 
 app.include_router(auth.router, prefix="/api/v1")

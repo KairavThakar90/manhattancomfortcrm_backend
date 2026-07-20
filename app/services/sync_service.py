@@ -433,6 +433,8 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                 container_fields = dict(
                     sellercloud_container_id=container_sc_id,
                     container_name=details_section.get("ContainerName"),
+                    estimated_arrival_date=details_section.get("EstimatedArrivalDate"),
+                    received_date=details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate"),
                     raw_json=detail,
                 )
                 if container:
