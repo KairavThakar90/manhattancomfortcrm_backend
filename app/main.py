@@ -14,13 +14,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(companies.router)
-app.include_router(customers.router)
-app.include_router(vendors.router)
-app.include_router(purchase_orders.router)
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(companies.router, prefix="/api/v1")
+app.include_router(customers.router, prefix="/api/v1")
+app.include_router(vendors.router, prefix="/api/v1")
+app.include_router(purchase_orders.router, prefix="/api/v1")
 
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/v1/health")
+def health_check_v1():
+    return {"status": "ok", "version": "v1"}
