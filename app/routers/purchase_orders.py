@@ -22,7 +22,10 @@ def list_purchase_orders(
     vendor_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.PurchaseOrder).options(joinedload(models.PurchaseOrder.items))
+    q = db.query(models.PurchaseOrder).options(
+        joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
+        joinedload(models.PurchaseOrder.vendor)
+    )
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
     if vendor_id:
@@ -47,7 +50,10 @@ def list_purchase_orders(
 def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
     po = (
         db.query(models.PurchaseOrder)
-        .options(joinedload(models.PurchaseOrder.items))
+        .options(
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
+            joinedload(models.PurchaseOrder.vendor)
+        )
         .filter(models.PurchaseOrder.id == po_id)
         .first()
     )

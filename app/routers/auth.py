@@ -6,7 +6,7 @@ from datetime import datetime
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
-from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut
+from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -128,3 +128,46 @@ def logout(
 def read_current_user(current_user=Depends(auth_utils.get_current_user)):
     """Get current authenticated user information."""
     return current_user
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
+    """
+    Create a new user account.
+    
+    - **email**: Valid email address (must be unique)
+    - **password**: Plain text password (will be hashed before storing)
+    - **full_name**: Optional full name
+    - **role**: User role (default: "user", can be "admin", "user", etc.)
+    
+    Note: This endpoint is public and doesn't require authentication.
+    In production, you may want to add authentication or rate limiting.
+    """
+    # Check if user already exists
+    existing_user = db.query(models.User).filter(
+        models.User.email == user_data.email
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Hash the password
+    hashed_password = auth_utils.get_password_hash(user_data.password)
+    
+    # Create new user
+    new_user = models.User(
+        email=user_data.email,
+        hashed_password=hashed_password,
+        full_name=user_data.full_name,
+        role=user_data.role,
+        is_active=True
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return UserOut.model_validate(new_user)

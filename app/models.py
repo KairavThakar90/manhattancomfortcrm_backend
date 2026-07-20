@@ -144,6 +144,7 @@ class PurchaseOrderItem(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     purchase_order = relationship("PurchaseOrder", back_populates="items")
+    container_links = relationship("PurchaseOrderItemContainer", back_populates="item", cascade="all, delete-orphan")
 
 
 class ShippingContainer(Base):
@@ -156,6 +157,8 @@ class ShippingContainer(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    item_links = relationship("PurchaseOrderItemContainer", back_populates="container", cascade="all, delete-orphan")
+
 
 class PurchaseOrderItemContainer(Base):
     __tablename__ = "purchase_order_item_containers"
@@ -166,6 +169,9 @@ class PurchaseOrderItemContainer(Base):
     qty_in_container = Column(Integer, default=0)
     raw_json = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    item = relationship("PurchaseOrderItem", back_populates="container_links")
+    container = relationship("ShippingContainer", back_populates="item_links")
 
 
 class SyncLog(Base):
