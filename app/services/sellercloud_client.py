@@ -86,6 +86,11 @@ class SellerCloudClient:
             params={"pageNumber": page_number, "pageSize": page_size},
         )
         return resp.json()
+    
+    def get_vendor(self, vendor_id: int) -> dict:
+        """Get full vendor detail by ID."""
+        resp = self._request("GET", f"/api/Vendors/{vendor_id}")
+        return resp.json()
 
     # ---------------- Customers ----------------
     def get_customers(self, page_number: int = 1, page_size: int = 100) -> dict:

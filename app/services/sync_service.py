@@ -46,6 +46,81 @@ def _map_company(row: dict) -> dict:
     )
 
 
+# ---------------- Vendors ----------------
+def _map_vendor(row: dict) -> dict:
+    """
+    Maps SellerCloud vendor response to local vendor fields.
+    
+    Confirmed API response from GET /api/Vendors and GET /api/Vendors/{id}:
+      - ID: vendor ID
+      - Name: vendor name
+      - Email: primary email
+      - EmailCC: CC email
+      - Alias: vendor alias
+      - AccountNumber: account number
+      - Website: vendor website
+      - IsActive: active status
+      - IsDefault: default vendor flag
+    
+    Note: SellerCloud Vendor API does NOT provide address or phone fields.
+    """
+    return dict(
+        sellercloud_vendor_id=row.get("ID"),
+        name=row.get("Name") or "Unnamed Vendor",
+        email=row.get("Email"),
+        phone=None,  # Not available in SellerCloud Vendor API
+        address_line1=None,  # Not available in SellerCloud Vendor API
+        city=None,  # Not available in SellerCloud Vendor API
+        state=None,  # Not available in SellerCloud Vendor API
+        postal_code=None,  # Not available in SellerCloud Vendor API
+        country=None,  # Not available in SellerCloud Vendor API
+        is_active=row.get("IsActive", True),
+        raw_json=row,
+    )
+
+
+def sync_vendors(db: Session) -> int:
+    """
+    Pulls vendors from SellerCloud and upserts them into the vendors table.
+    This should be run periodically to ensure vendor names and contact info
+    are up-to-date, not just the stub records created during PO sync.
+    """
+    synced = 0
+    try:
+        page = 1
+        while True:
+            data = sellercloud_client.get_vendors(page_number=page, page_size=100)
+            items = data.get("Items") or data.get("items") or data
+            if not items:
+                break
+
+            for row in items:
+                mapped = _map_vendor(row)
+                existing = (
+                    db.query(models.Vendor)
+                    .filter(models.Vendor.sellercloud_vendor_id == mapped["sellercloud_vendor_id"])
+                    .first()
+                )
+                if existing:
+                    for k, v in mapped.items():
+                        setattr(existing, k, v)
+                else:
+                    db.add(models.Vendor(**mapped))
+                synced += 1
+
+            db.commit()
+            if len(items) < 100:
+                break
+            page += 1
+
+        _log_sync(db, "vendors", "success", synced)
+    except Exception as e:
+        db.rollback()
+        _log_sync(db, "vendors", "failed", synced, str(e))
+        raise
+    return synced
+
+
 def sync_companies(db: Session) -> int:
     synced = 0
     try:
@@ -135,6 +210,27 @@ def _map_po(detail: dict) -> dict:
         notes=vendor_invoice.get("Memo") or purchase.get("Instructions"),
         raw_json=detail,
     )
+
+
+def _get_or_create_company(db: Session, company_sc_id):
+    if not company_sc_id:
+        return None
+    company = (
+        db.query(models.Company)
+        .filter(models.Company.sellercloud_company_id == company_sc_id)
+        .first()
+    )
+    if not company:
+        # Not seen via sync_companies yet - create a stub so the PO can still
+        # link to it. Run sync_companies afterward (or first) to fill in the
+        # real name/details for this row.
+        company = models.Company(
+            sellercloud_company_id=company_sc_id,
+            name=f"Company {company_sc_id}",
+        )
+        db.add(company)
+        db.flush()  # get company.id without full commit
+    return company
 
 
 def _get_or_create_vendor(db: Session, vendor_sc_id):
@@ -227,8 +323,10 @@ def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100)
                       f"Top-level keys: {list(detail.keys())[:15]}")
 
             vendor = _get_or_create_vendor(db, purchase.get("VendorId"))
+            company = _get_or_create_company(db, purchase.get("CompanyId"))
             mapped = _map_po(detail)
             mapped["vendor_id"] = vendor.id if vendor else None
+            mapped["company_id"] = company.id if company else None
 
             if "Description" not in purchase:
                 print(f"[sync_purchase_orders] WARNING: PO {po_id} - 'Description' key missing entirely from "

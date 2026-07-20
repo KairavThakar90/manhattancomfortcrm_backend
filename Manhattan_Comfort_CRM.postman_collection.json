@@ -1,0 +1,343 @@
+{
+  "info": {
+    "name": "Manhattan Comfort CRM",
+    "description": "Two folders: 'Your API' (the FastAPI backend backed by Neon, JWT-protected) and 'SellerCloud Direct' (raw calls straight to SellerCloud, mirroring the Apps Script's auth -> GetAllByView -> per-PO detail flow). Both auto-save their tokens into collection variables via the Tests tab on the login/token requests, so every other request just reuses {{api_token}} or {{sc_token}} automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000", "type": "string" },
+    { "key": "api_email", "value": "you@example.com", "type": "string" },
+    { "key": "api_password", "value": "your_app_password", "type": "string" },
+    { "key": "api_token", "value": "", "type": "string" },
+
+    { "key": "sc_base_url", "value": "https://cd.api.sellercloud.com/rest", "type": "string" },
+    { "key": "sc_username", "value": "your_sellercloud_username", "type": "string" },
+    { "key": "sc_password", "value": "your_sellercloud_password", "type": "string" },
+    { "key": "sc_token", "value": "", "type": "string" },
+    { "key": "sc_view_id", "value": "25", "type": "string" },
+    { "key": "sc_po_id", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Your API",
+      "item": [
+        {
+          "name": "Auth",
+          "item": [
+            {
+              "name": "Login (get JWT)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+                ],
+                "body": {
+                  "mode": "urlencoded",
+                  "urlencoded": [
+                    { "key": "username", "value": "{{api_email}}", "type": "text" },
+                    { "key": "password", "value": "{{api_password}}", "type": "text" }
+                  ]
+                },
+                "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] },
+                "description": "OAuth2 password flow. 'username' is your app email (from create_user.py), not your SellerCloud login."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 200) {",
+                      "    const json = pm.response.json();",
+                      "    pm.collectionVariables.set('api_token', json.access_token);",
+                      "    console.log('Saved api_token to collection variable.');",
+                      "} else {",
+                      "    console.error('Login failed:', pm.response.text());",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Get current user (Me)",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": { "raw": "{{base_url}}/auth/me", "host": ["{{base_url}}"], "path": ["auth", "me"] }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Companies",
+          "item": [
+            {
+              "name": "List companies",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/companies?page=1&page_size=25",
+                  "host": ["{{base_url}}"],
+                  "path": ["companies"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "page_size", "value": "25" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Get company by ID",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/companies/:company_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["companies", ":company_id"],
+                  "variable": [{ "key": "company_id", "value": "" }]
+                }
+              }
+            },
+            {
+              "name": "Sync companies from SellerCloud",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": { "raw": "{{base_url}}/companies/sync", "host": ["{{base_url}}"], "path": ["companies", "sync"] },
+                "description": "Pulls Companies from SellerCloud and upserts into Neon."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Customers",
+          "item": [
+            {
+              "name": "List customers",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/customers?page=1&page_size=25",
+                  "host": ["{{base_url}}"],
+                  "path": ["customers"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "page_size", "value": "25" },
+                    { "key": "company_id", "value": "", "disabled": true }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Get customer by ID",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/customers/:customer_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["customers", ":customer_id"],
+                  "variable": [{ "key": "customer_id", "value": "" }]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Purchase Orders",
+          "item": [
+            {
+              "name": "List purchase orders",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/purchase-orders?page=1&page_size=25",
+                  "host": ["{{base_url}}"],
+                  "path": ["purchase-orders"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "page_size", "value": "25" },
+                    { "key": "status_code", "value": "", "disabled": true },
+                    { "key": "vendor_id", "value": "", "disabled": true }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Get purchase order by ID (with items)",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/purchase-orders/:po_id",
+                  "host": ["{{base_url}}"],
+                  "path": ["purchase-orders", ":po_id"],
+                  "variable": [{ "key": "po_id", "value": "" }]
+                }
+              }
+            },
+            {
+              "name": "Sync purchase orders from SellerCloud",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Authorization", "value": "Bearer {{api_token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/purchase-orders/sync?view_id={{sc_view_id}}",
+                  "host": ["{{base_url}}"],
+                  "path": ["purchase-orders", "sync"],
+                  "query": [{ "key": "view_id", "value": "{{sc_view_id}}" }]
+                },
+                "description": "Two-pass sync: lists PO IDs from SellerCloud's GetAllByView, then fetches each PO's full detail (incl. QtyInContainer) and upserts into Neon. Can take a while on first run for large PO counts."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SellerCloud Direct",
+      "description": "Raw calls straight to SellerCloud, mirroring the working Apps Script: get a token, list PO IDs via the saved view, then fetch full detail per PO for complete item data (incl. QtyInContainer, which the list endpoint omits).",
+      "item": [
+        {
+          "name": "Get token",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"Username\": \"{{sc_username}}\",\n  \"Password\": \"{{sc_password}}\"\n}"
+            },
+            "url": { "raw": "{{sc_base_url}}/api/token", "host": ["{{sc_base_url}}"], "path": ["api", "token"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    pm.collectionVariables.set('sc_token', json.access_token);",
+                  "    console.log('Saved sc_token to collection variable.');",
+                  "} else {",
+                  "    console.error('SellerCloud auth failed:', pm.response.text());",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Purchase Orders by view (page 1)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{sc_token}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{sc_base_url}}/api/PurchaseOrders/GetAllByView?viewID={{sc_view_id}}&pageNumber=1&pageSize=50",
+              "host": ["{{sc_base_url}}"],
+              "path": ["api", "PurchaseOrders", "GetAllByView"],
+              "query": [
+                { "key": "viewID", "value": "{{sc_view_id}}" },
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "50" }
+              ]
+            },
+            "description": "Same call your Apps Script's importFlattenedPOItems() makes. Increment pageNumber to page through results; SellerCloud returns fewer than pageSize items on the last page."
+          }
+        },
+        {
+          "name": "Get Purchase Order detail (incl. QtyInContainer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{sc_token}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{sc_base_url}}/api/PurchaseOrders/{{sc_po_id}}",
+              "host": ["{{sc_base_url}}"],
+              "path": ["api", "PurchaseOrders", "{{sc_po_id}}"]
+            },
+            "description": "Set the sc_po_id collection variable to an ID returned from the list call above. This is the only endpoint that returns QtyInContainer per item."
+          }
+        },
+        {
+          "name": "List Companies",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{sc_token}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{sc_base_url}}/api/Companies?pageNumber=1&pageSize=50",
+              "host": ["{{sc_base_url}}"],
+              "path": ["api", "Companies"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "50" }
+              ]
+            },
+            "description": "Not confirmed against your tenant yet (unlike PurchaseOrders) - check the actual response fields here before trusting the mapping in sync_service.py's _map_company()."
+          }
+        },
+        {
+          "name": "List Vendors",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{sc_token}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{sc_base_url}}/api/Vendors?pageNumber=1&pageSize=50",
+              "host": ["{{sc_base_url}}"],
+              "path": ["api", "Vendors"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "50" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Customers",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{sc_token}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{sc_base_url}}/api/Customers?pageNumber=1&pageSize=50",
+              "host": ["{{sc_base_url}}"],
+              "path": ["api", "Customers"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "50" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

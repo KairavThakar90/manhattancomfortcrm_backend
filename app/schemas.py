@@ -21,8 +21,17 @@ class UserOut(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutResponse(BaseModel):
+    message: str
 
 
 # ---------- Company ----------
@@ -37,6 +46,22 @@ class CompanyOut(BaseModel):
     state: Optional[str] = None
     country: Optional[str] = None
     is_active: bool
+    updated_at: datetime
+
+
+# ---------- Vendor ----------
+class VendorOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sellercloud_vendor_id: Optional[int] = None
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
+    is_active: bool
+    container_lead_time_days: Optional[int] = None
     updated_at: datetime
 
 
