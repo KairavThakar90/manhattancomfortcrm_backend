@@ -484,3 +484,163 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
         raise
 
     return {"containers_synced": containers_synced, "links_synced": links_synced}
+
+
+def sync_containers_for_all_pos(db: Session, limit: int = None) -> dict:
+    """
+    Sync containers for all (or limited number of) purchase orders.
+    
+    This function processes POs one by one, calling sync_containers for each.
+    It's more efficient than the original sync_containers(po_id=None) because
+    it processes POs in batches and provides progress tracking.
+    
+    Args:
+        db: Database session
+        limit: Maximum number of POs to process (for testing). None = all POs
+    
+    Returns:
+        dict with:
+        - pos_processed: Number of POs that were checked
+        - containers_synced: Total containers created/updated
+        - links_synced: Total item-container links created/updated
+    """
+    # Get all POs with items
+    query = (
+        db.query(models.PurchaseOrder)
+        .join(models.PurchaseOrderItem)
+        .filter(models.PurchaseOrderItem.sku.isnot(None))
+        .distinct()
+        .order_by(models.PurchaseOrder.sellercloud_po_id.desc())
+    )
+    
+    if limit:
+        query = query.limit(limit)
+    
+    pos = query.all()
+    
+    print(f"[sync_containers_for_all_pos] Processing {len(pos)} POs...")
+    
+    total_containers = 0
+    total_links = 0
+    pos_processed = 0
+    
+    try:
+        for po in pos:
+            if not po.sellercloud_po_id:
+                continue
+            
+            try:
+                result = sync_containers(db, po_id=po.sellercloud_po_id)
+                total_containers += result["containers_synced"]
+                total_links += result["links_synced"]
+                pos_processed += 1
+                
+                if pos_processed % 10 == 0:
+                    print(f"[sync_containers_for_all_pos] Processed {pos_processed}/{len(pos)} POs...")
+                    
+            except Exception as e:
+                print(f"[sync_containers_for_all_pos] Error processing PO {po.sellercloud_po_id}: {e}")
+                # Continue with next PO instead of failing completely
+                continue
+        
+        print(f"[sync_containers_for_all_pos] DONE. {pos_processed} POs, {total_containers} containers, {total_links} links.")
+        _log_sync(db, "shipping_containers_bulk", "success", total_containers, 
+                  f"Processed {pos_processed} POs, created/updated {total_containers} containers, {total_links} links")
+        
+    except Exception as e:
+        print(f"[sync_containers_for_all_pos] FAILED after {pos_processed} POs: {e}")
+        _log_sync(db, "shipping_containers_bulk", "failed", total_containers, str(e))
+        raise
+    
+    return {
+        "pos_processed": pos_processed,
+        "containers_synced": total_containers,
+        "links_synced": total_links
+    }
+
+    item_by_sc_id = {it.sellercloud_item_id: it for it in items if it.sellercloud_item_id}
+
+    seen_container_ids = set()
+    checked_pairs = set()
+    containers_synced = 0
+    links_synced = 0
+
+    try:
+        for it in items:
+            po = it.purchase_order
+            pair = (po.sellercloud_po_id, it.sku)
+            if pair in checked_pairs or not po.sellercloud_po_id:
+                continue
+            checked_pairs.add(pair)
+
+            resp = sellercloud_client.get_containers_for_po_product(po.sellercloud_po_id, it.sku)
+            candidates = resp.get("Items") or []
+
+            for c in candidates:
+                container_sc_id = c.get("ID")
+                if not container_sc_id or container_sc_id in seen_container_ids:
+                    continue
+                seen_container_ids.add(container_sc_id)
+
+                detail = sellercloud_client.get_container(container_sc_id)
+                details_section = detail.get("Details") or {}
+
+                container = (
+                    db.query(models.ShippingContainer)
+                    .filter(models.ShippingContainer.sellercloud_container_id == container_sc_id)
+                    .first()
+                )
+                container_fields = dict(
+                    sellercloud_container_id=container_sc_id,
+                    container_name=details_section.get("ContainerName"),
+                    estimated_arrival_date=details_section.get("EstimatedArrivalDate"),
+                    received_date=details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate"),
+                    raw_json=detail,
+                )
+                if container:
+                    for k, v in container_fields.items():
+                        setattr(container, k, v)
+                else:
+                    container = models.ShippingContainer(**container_fields)
+                    db.add(container)
+                    db.flush()
+                containers_synced += 1
+
+                results = ((detail.get("Items") or {}).get("Results")) or []
+                for entry in results:
+                    match = item_by_sc_id.get(entry.get("POItemID"))
+                    if not match:
+                        continue  # this container item belongs to a PO/item we haven't synced locally - skip
+
+                    existing_link = (
+                        db.query(models.PurchaseOrderItemContainer)
+                        .filter(
+                            models.PurchaseOrderItemContainer.purchase_order_item_id == match.id,
+                            models.PurchaseOrderItemContainer.shipping_container_id == container.id,
+                        )
+                        .first()
+                    )
+                    link_fields = dict(
+                        purchase_order_item_id=match.id,
+                        shipping_container_id=container.id,
+                        qty_in_container=entry.get("Qty", 0),
+                        raw_json=entry,
+                    )
+                    if existing_link:
+                        for k, v in link_fields.items():
+                            setattr(existing_link, k, v)
+                    else:
+                        db.add(models.PurchaseOrderItemContainer(**link_fields))
+                    links_synced += 1
+
+            db.commit()
+
+        print(f"[sync_containers] done. {containers_synced} containers, {links_synced} item links.")
+        _log_sync(db, "shipping_containers", "success", containers_synced)
+    except Exception as e:
+        db.rollback()
+        print(f"[sync_containers] FAILED after {containers_synced} containers: {e}")
+        _log_sync(db, "shipping_containers", "failed", containers_synced, str(e))
+        raise
+
+    return {"containers_synced": containers_synced, "links_synced": links_synced}

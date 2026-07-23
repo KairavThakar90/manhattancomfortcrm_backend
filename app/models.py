@@ -110,6 +110,7 @@ class PurchaseOrder(Base):
     date_ordered = Column(DateTime(timezone=True))
     expected_delivery_date = Column(DateTime(timezone=True))
     invoice_date = Column(DateTime(timezone=True))
+    container_lead_time_days = Column(Integer)  # Days from invoice date to container arrival, set per PO
     total_amount = Column(Numeric(14, 2))
     currency = Column(String(10), default="USD")
     notes = Column(Text)

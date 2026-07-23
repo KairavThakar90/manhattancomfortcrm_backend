@@ -20,7 +20,17 @@ from app.config import settings
 
 class SellerCloudClient:
     def __init__(self):
-        self.base_url = settings.SELLERCLOUD_BASE_URL.rstrip("/")
+        base_url = settings.SELLERCLOUD_BASE_URL.rstrip("/")
+        
+        # Validate that base_url has protocol
+        if not base_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"SELLERCLOUD_BASE_URL must start with 'http://' or 'https://'. "
+                f"Got: '{base_url}'. "
+                f"Expected format: 'https://cd.api.sellercloud.com/rest'"
+            )
+        
+        self.base_url = base_url
         self.username = settings.SELLERCLOUD_USERNAME
         self.password = settings.SELLERCLOUD_PASSWORD
         self._token: Optional[str] = None
