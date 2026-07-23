@@ -1,4 +1,4 @@
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -18,6 +18,14 @@ def normalize_database_url(database_url: str) -> str:
 
     parsed = urlparse(database_url)
     if parsed.scheme.startswith("postgres"):
+        # If credentials contain characters like '@', ensure the password is
+        # URL-encoded so SQLAlchemy/psycopg2 parse host/port correctly.
+        if parsed.password is not None:
+            user_info = parsed.username or ""
+            password = quote(parsed.password, safe="")
+            database_url = urlunparse(parsed._replace(netloc=f"{user_info}:{password}@{parsed.hostname or ''}{f':{parsed.port}' if parsed.port else ''}"))
+            parsed = urlparse(database_url)
+
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         if "sslmode" not in query:
             query["sslmode"] = "require"
