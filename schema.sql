@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     date_ordered                  TIMESTAMPTZ,     -- SellerCloud "DateOrdered"
     expected_delivery_date         TIMESTAMPTZ,
     invoice_date                    TIMESTAMPTZ,   -- from Invoices[0].InvoiceDate
+    container_lead_time_days        INTEGER,       -- Days from invoice date to container arrival, set per PO
     total_amount                    NUMERIC(14,2),
     currency                        VARCHAR(10) DEFAULT 'USD',
     notes                            TEXT,
@@ -158,6 +159,8 @@ CREATE TABLE IF NOT EXISTS shipping_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sellercloud_container_id   INTEGER UNIQUE,
     container_name             VARCHAR(255),
+    estimated_arrival_date     TIMESTAMPTZ,
+    received_date              TIMESTAMPTZ,
     raw_json                   JSONB,
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()

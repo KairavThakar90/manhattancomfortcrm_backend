@@ -10,16 +10,23 @@ def normalize_database_url(database_url: str) -> str:
     """Normalize Postgres URLs for SQLAlchemy/psycopg2.
 
     - Rewrite deprecated postgres:// scheme to postgresql://
-    - Ensure sslmode=require for managed Postgres providers like Supabase
+    - Add sslmode=require for remote managed Postgres providers like Supabase
       when it is not already present.
+    - Leave localhost connections untouched so local Postgres instances that
+      do not require SSL continue to work.
     """
+    if not database_url:
+        return database_url
+
     if database_url.startswith("postgres://"):
         database_url = "postgresql://" + database_url[len("postgres://"):]
 
     parsed = urlparse(database_url)
     if parsed.scheme.startswith("postgres"):
+        host = (parsed.hostname or "").lower()
+        is_localhost = host in {"localhost", "127.0.0.1", "::1"}
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        if "sslmode" not in query:
+        if "sslmode" not in query and not is_localhost:
             query["sslmode"] = "require"
             database_url = urlunparse(parsed._replace(query=urlencode(query)))
 
