@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, EmailStr, ConfigDict, computed_field
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field
 
 
 # ---------- Auth ----------
@@ -98,14 +98,130 @@ class CustomerOut(BaseModel):
 
 # ---------- Purchase Order ----------
 class ContainerSummary(BaseModel):
-    """Container summary for items"""
+    """Container summary for items — includes qty_in_container from the join table."""
     model_config = ConfigDict(from_attributes=True)
+    id: Optional[uuid.UUID] = None
+    sellercloud_container_id: Optional[int] = None
+    container_name: Optional[str] = None
+    estimated_arrival_date: Optional[datetime] = None
+    received_date: Optional[datetime] = None
+    qty_in_container: Optional[int] = None
+
+
+class ContainerOut(BaseModel):
+    """Container list item — includes summary counts and received status."""
     id: uuid.UUID
     sellercloud_container_id: Optional[int] = None
     container_name: Optional[str] = None
-    estimated_arrival_date: Optional[datetime] = None  # Container ETA
-    received_date: Optional[datetime] = None  # Actual received date
-    qty_in_container: int = 0
+    estimated_arrival_date: Optional[datetime] = None
+    received_date: Optional[datetime] = None
+    is_received: bool = False           # True when received_date is not None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    # Summary counts (populated by the list endpoint, not from ORM directly)
+    total_items: Optional[int] = None
+    total_qty_in_container: Optional[int] = None
+    total_qty_received: Optional[int] = None
+    unique_pos: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContainerListResponse(BaseModel):
+    """Paginated container list response."""
+    total: int
+    page: int
+    page_size: int
+    meta: dict = {}
+    results: List[ContainerOut] = []
+
+
+class ContainerDetailItemOut(BaseModel):
+    """One line item inside a container detail response."""
+    po_item_id: uuid.UUID
+    sellercloud_item_id: Optional[int] = None
+    sellercloud_po_id: Optional[int] = None
+    po_title: Optional[str] = None
+    vendor_name: Optional[str] = None
+    sku: Optional[str] = None
+    product_name: Optional[str] = None
+    qty_in_container: int
+    qty_ordered: int
+    qty_received: int
+    qty_remaining: int
+    is_fully_received: bool = False     # True when qty_received >= qty_ordered
+    unit_price: Optional[float] = None
+
+
+class ContainerDetailOut(BaseModel):
+    """Full container detail with all items and summary."""
+    id: uuid.UUID
+    sellercloud_container_id: Optional[int] = None
+    container_name: Optional[str] = None
+    estimated_arrival_date: Optional[datetime] = None
+    received_date: Optional[datetime] = None
+    is_received: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    summary: dict = {}
+    items: List[ContainerDetailItemOut] = []
+
+
+class ContainerItemCreate(BaseModel):
+    po_item_id: Optional[uuid.UUID] = Field(default=None, description="Local UUID of PO item (optional if sellercloud_item_id or sellercloud_po_id+sku is provided)")
+    sellercloud_po_id: Optional[int] = Field(default=None, description="SellerCloud PO ID")
+    sellercloud_item_id: Optional[int] = Field(default=None, description="SellerCloud PO Item ID")
+    sku: Optional[str] = Field(default=None, description="Product SKU")
+    qty_in_container: int = Field(gt=0, description="Quantity of this item in the container")
+
+
+class ContainerCreate(BaseModel):
+    container_name: str = Field(min_length=1, max_length=255, description="Container name/number")
+    estimated_arrival_date: Optional[datetime] = Field(default=None, description="Expected arrival date")
+    received_date: Optional[datetime] = Field(default=None, description="Actual received date")
+    items: List[ContainerItemCreate] = Field(min_length=1, description="List of items in this container")
+
+
+# ---------- PO items for container creation ----------
+class POItemForContainerOut(BaseModel):
+    """Shape of one PO line item when building a new container."""
+    po_item_id: uuid.UUID
+    sellercloud_item_id: Optional[int] = None
+    sellercloud_po_id: Optional[int] = None
+    sku: Optional[str] = None
+    product_name: Optional[str] = None
+    qty_ordered: int
+    qty_received: int
+    qty_remaining: int                  # qty_ordered - qty_received
+    qty_already_in_containers: int      # running total across all existing containers
+    qty_available_for_container: int    # qty_ordered - qty_already_in_containers (can be 0)
+    existing_containers: List[ContainerSummary] = []
+
+
+class POItemsForContainerResponse(BaseModel):
+    """Response for GET /containers/po-items/{sellercloud_po_id}"""
+    po_id: uuid.UUID
+    sellercloud_po_id: int
+    po_title: Optional[str] = None
+    vendor_name: Optional[str] = None
+    items: List[POItemForContainerOut] = []
+    summary: dict = {}
+
+
+
+class ContainerItemOut(BaseModel):
+    po_id: uuid.UUID
+    po_sellercloud_id: Optional[int] = None
+    po_title: Optional[str] = None
+    vendor_name: Optional[str] = None
+    item_id: uuid.UUID
+    sku: Optional[str] = None
+    product_name: Optional[str] = None
+    qty_in_container: int
+    qty_ordered: int
+    qty_received: int
+    qty_remaining: int
+    unit_price: Optional[float] = None
 
 
 class PurchaseOrderItemOut(BaseModel):
@@ -274,3 +390,8 @@ class SyncResponse(BaseModel):
     status: str
     records_synced: int
     message: Optional[str] = None
+
+
+class POExportRequest(BaseModel):
+    po_ids: list[int]
+
