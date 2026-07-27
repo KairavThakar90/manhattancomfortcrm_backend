@@ -390,3 +390,8 @@ class SyncResponse(BaseModel):
     status: str
     records_synced: int
     message: Optional[str] = None
+
+
+class POExportRequest(BaseModel):
+    po_ids: list[int]
+
