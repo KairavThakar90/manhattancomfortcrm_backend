@@ -1,41 +1,14 @@
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
-
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.config import settings
 
-
-def normalize_database_url(database_url: str) -> str:
-    """Normalize Postgres URLs for SQLAlchemy/psycopg2.
-
-    - Rewrite deprecated postgres:// scheme to postgresql://
-    - Ensure sslmode=require for managed Postgres providers like Supabase
-      when it is not already present.
-    """
-    if database_url.startswith("postgres://"):
-        database_url = "postgresql://" + database_url[len("postgres://"):]
-
-    parsed = urlparse(database_url)
-    if parsed.scheme.startswith("postgres"):
-        # If credentials contain characters like '@', ensure the password is
-        # URL-encoded so SQLAlchemy/psycopg2 parse host/port correctly.
-        if parsed.password is not None:
-            user_info = parsed.username or ""
-            password = quote(parsed.password, safe="")
-            database_url = urlunparse(parsed._replace(netloc=f"{user_info}:{password}@{parsed.hostname or ''}{f':{parsed.port}' if parsed.port else ''}"))
-            parsed = urlparse(database_url)
-
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        if "sslmode" not in query:
-            query["sslmode"] = "require"
-            database_url = urlunparse(parsed._replace(query=urlencode(query)))
-
-    return database_url
-
-
+# Neon works fine with the plain psycopg2 driver + sslmode=require in the URL -
+# no scheme rewriting needed, "postgresql://" is psycopg2's default dialect.
+# pool_pre_ping avoids "server closed the connection" errors after idle time,
+# which Neon's autosuspend can trigger.
 engine = create_engine(
-    normalize_database_url(settings.DATABASE_URL),
+    settings.DATABASE_URL,
     pool_pre_ping=True,
     pool_recycle=300,
 )

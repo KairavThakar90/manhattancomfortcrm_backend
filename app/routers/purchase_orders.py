@@ -14,6 +14,116 @@ from app.services.sync_service import sync_purchase_orders, sync_containers
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
 
 
+@router.get("/filters/all-categories")
+def get_all_filter_categories(
+    vendor_id: Optional[int] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all filter categories in one response.
+    
+    Returns 4 objects:
+    1. new_arrivals: POs created in last 10 days without invoice
+    2. invoice_delayed: POs older than 10 days without invoice  
+    3. delivery_overdue: POs where delivery is overdue based on lead time
+    4. remaining_items: POs with items not fully received
+    
+    Each object contains:
+    - data: Array of POs (paginated)
+    - meta: Pagination info (total, page, page_size, etc.)
+    """
+    from datetime import datetime, timedelta, timezone
+    
+    today = datetime.now(timezone.utc).date()
+    ten_days_ago = today - timedelta(days=10)
+    
+    # Base query
+    base_query = db.query(models.PurchaseOrder).options(
+        joinedload(models.PurchaseOrder.vendor),
+        joinedload(models.PurchaseOrder.items)
+    )
+    
+    # Apply vendor filter if provided
+    if vendor_id:
+        base_query = base_query.filter(models.PurchaseOrder.vendor_id == models.Vendor.id).filter(models.Vendor.sellercloud_vendor_id == vendor_id)
+    
+    # 1. NEW ARRIVALS: Created in last 10 days without invoice
+    new_arrivals_query = base_query.filter(
+        and_(
+            models.PurchaseOrder.created_on >= ten_days_ago,
+            models.PurchaseOrder.invoice_date.is_(None)
+        )
+    )
+    new_arrivals_total = new_arrivals_query.count()
+    new_arrivals_data = new_arrivals_query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    # 2. INVOICE DELAYED: Older than 10 days without invoice
+    invoice_delayed_query = base_query.filter(
+        and_(
+            models.PurchaseOrder.created_on < ten_days_ago,
+            models.PurchaseOrder.invoice_date.is_(None)
+        )
+    )
+    invoice_delayed_total = invoice_delayed_query.count()
+    invoice_delayed_data = invoice_delayed_query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    # 3. DELIVERY OVERDUE: Invoice date + lead time < today
+    delivery_overdue_query = base_query.filter(
+        and_(
+            models.PurchaseOrder.invoice_date.isnot(None),
+            models.PurchaseOrder.container_lead_time_days.isnot(None)
+        )
+    )
+    delivery_overdue_pos = []
+    for po in delivery_overdue_query.all():
+        expected_delivery = po.invoice_date.date() + timedelta(days=po.container_lead_time_days)
+        if expected_delivery < today:
+            delivery_overdue_pos.append(po)
+    
+    delivery_overdue_total = len(delivery_overdue_pos)
+    delivery_overdue_data = delivery_overdue_pos[(page - 1) * page_size : page * page_size]
+    
+    # 4. REMAINING ITEMS: POs with qty_remaining > 0
+    remaining_items_query = base_query.join(models.PurchaseOrderItem).filter(
+        models.PurchaseOrderItem.qty_received < models.PurchaseOrderItem.qty_ordered
+    ).distinct()
+    remaining_items_total = remaining_items_query.count()
+    remaining_items_data = remaining_items_query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    # Helper function to create response object
+    def create_response_object(data_list, total):
+        validated_pos = []
+        for po in data_list:
+            try:
+                po_dict = PurchaseOrderOut.model_validate(po).model_dump()
+                validated_pos.append(po_dict)
+            except Exception as e:
+                print(f"Error validating PO {po.id}: {e}")
+                continue
+        
+        return {
+            "data": validated_pos,
+            "meta": {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size,
+                "has_next": page * page_size < total,
+                "has_prev": page > 1
+            }
+        }
+    
+    # Build response with all 4 categories
+    return {
+        "new_arrivals": create_response_object(new_arrivals_data, new_arrivals_total),
+        "invoice_delayed": create_response_object(invoice_delayed_data, invoice_delayed_total),
+        "delivery_overdue": create_response_object(delivery_overdue_data, delivery_overdue_total),
+        "remaining_items": create_response_object(remaining_items_data, remaining_items_total)
+    }
+
+
 @router.get("/summary/status-counts")
 def get_status_counts(db: Session = Depends(get_db)):
     """
@@ -144,33 +254,130 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
 def get_filtered_pos(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
-    filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items"),
+    filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items. If not provided, returns all 4 categories."),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     db: Session = Depends(get_db),
 ):
     """
     Unified filter endpoint for purchase orders.
     
-    Filter Types:
+    **If filter_type is NOT provided**, returns all 4 categories in one response:
+    {
+      "new_arrivals": { data: [...], meta: {...} },
+      "invoice_delayed": { data: [...], meta: {...} },
+      "delivery_overdue": { data: [...], meta: {...} },
+      "remaining_items": { data: [...], meta: {...} }
+    }
+    
+    **If filter_type IS provided**, returns single category:
     - new_without_invoice: POs created in last 10 days without invoice
     - invoice_delayed: POs older than 10 days without invoice
     - delivery_overdue: POs where delivery is overdue (invoice_date + lead_time < today)
     - remaining_items: POs with items not fully received (qty_remaining > 0)
-    - If no filter_type provided, returns all POs
     
-    Optional vendor_id parameter works with all filter types.
+    Optional vendor_id parameter works with all modes.
     
     Examples:
-    - All POs: GET /api/v1/purchase-orders/filters/all
-    - With filter: GET /api/v1/purchase-orders/filters/all?filter_type=delivery_overdue
-    - With vendor: GET /api/v1/purchase-orders/filters/all?filter_type=remaining_items&vendor_id=xxx
-    - Vendor only: GET /api/v1/purchase-orders/filters/all?vendor_id=xxx
+    - All categories: GET /api/v1/purchase-orders/filters/all
+    - Single filter: GET /api/v1/purchase-orders/filters/all?filter_type=delivery_overdue
+    - With vendor: GET /api/v1/purchase-orders/filters/all?vendor_id=xxx
     """
     from datetime import timezone
     
     cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
     today = datetime.now(timezone.utc).date()
     
+    # If no filter_type, return all 4 categories
+    if filter_type is None:
+        # Base query
+        base_q = (
+            db.query(models.PurchaseOrder)
+            .options(
+                joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
+                joinedload(models.PurchaseOrder.vendor)
+            )
+        )
+        
+        # Apply vendor filter if provided
+        if vendor_id:
+            base_q = base_q.filter(models.PurchaseOrder.vendor_id == vendor_id)
+        
+        # Helper function to create response object
+        def create_category_response(data_list, total):
+            po_models = [PurchaseOrderOut.model_validate(r) for r in data_list]
+            results = [po.model_dump(mode='python') for po in po_models]
+            
+            return {
+                "data": results,
+                "meta": {
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0,
+                    "has_next": page * page_size < total,
+                    "has_prev": page > 1
+                }
+            }
+        
+        # 1. NEW ARRIVALS (new_without_invoice)
+        q1 = base_q.filter(
+            and_(
+                models.PurchaseOrder.created_on >= cutoff_10_days,
+                models.PurchaseOrder.invoice_date.is_(None)
+            )
+        ).order_by(models.PurchaseOrder.created_on.desc())
+        new_arrivals_total = q1.count()
+        new_arrivals_data = q1.offset((page - 1) * page_size).limit(page_size).all()
+        
+        # 2. INVOICE DELAYED
+        q2 = base_q.filter(
+            and_(
+                models.PurchaseOrder.invoice_date.is_(None),
+                models.PurchaseOrder.created_on <= cutoff_10_days
+            )
+        ).order_by(models.PurchaseOrder.created_on.asc())
+        invoice_delayed_total = q2.count()
+        invoice_delayed_data = q2.offset((page - 1) * page_size).limit(page_size).all()
+        
+        # 3. DELIVERY OVERDUE
+        q3 = base_q.filter(
+            and_(
+                models.PurchaseOrder.invoice_date.isnot(None),
+                models.PurchaseOrder.container_lead_time_days.isnot(None)
+            )
+        )
+        all_pos_for_overdue = q3.all()
+        overdue_pos = []
+        for po in all_pos_for_overdue:
+            if po.invoice_date and po.container_lead_time_days:
+                expected_arrival = po.invoice_date.date() + timedelta(days=po.container_lead_time_days)
+                if expected_arrival < today:
+                    overdue_pos.append(po)
+        overdue_pos.sort(key=lambda po: po.invoice_date.date() + timedelta(days=po.container_lead_time_days))
+        delivery_overdue_total = len(overdue_pos)
+        delivery_overdue_data = overdue_pos[(page - 1) * page_size : page * page_size]
+        
+        # 4. REMAINING ITEMS
+        q4 = base_q.join(models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id)
+        all_pos_for_remaining = q4.distinct().all()
+        pos_with_remaining = []
+        for po in all_pos_for_remaining:
+            total_remaining = sum(item.qty_ordered - item.qty_received for item in po.items)
+            if total_remaining > 0:
+                pos_with_remaining.append(po)
+        pos_with_remaining.sort(key=lambda po: po.created_on or datetime.min, reverse=True)
+        remaining_items_total = len(pos_with_remaining)
+        remaining_items_data = pos_with_remaining[(page - 1) * page_size : page * page_size]
+        
+        # Return all 4 categories
+        return {
+            "new_arrivals": create_category_response(new_arrivals_data, new_arrivals_total),
+            "invoice_delayed": create_category_response(invoice_delayed_data, invoice_delayed_total),
+            "delivery_overdue": create_category_response(delivery_overdue_data, delivery_overdue_total),
+            "remaining_items": create_category_response(remaining_items_data, remaining_items_total)
+        }
+    
+    # If filter_type is provided, return single category (existing behavior)
     # Base query
     q = (
         db.query(models.PurchaseOrder)
@@ -694,23 +901,26 @@ def get_overdue_containers(
     }
 
 
-@router.patch("/{po_id}/lead-time")
+@router.patch("/{sellercloud_po_id}/lead-time")
 def update_po_lead_time(
-    po_id: str,
+    sellercloud_po_id: int,
     container_lead_time_days: int = Query(..., description="Container lead time in days"),
     db: Session = Depends(get_db)
 ):
     """
     Update container lead time for a specific purchase order.
     
+    Uses SellerCloud PO ID (integer like 11880).
+    
     Lead time is the number of days from invoice date to expected container arrival.
     This is set per PO, not per vendor, for more granular control.
     
     Example: 45 days means container arrives 45 days after invoice date.
     """
-    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_id).first()
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id).first()
     
     if not po:
+        raise HTTPException(status_code=404, detail=f"Purchase order {sellercloud_po_id} not found")
         raise HTTPException(status_code=404, detail="Purchase order not found")
     
     po.container_lead_time_days = container_lead_time_days

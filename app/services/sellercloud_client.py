@@ -140,6 +140,15 @@ class SellerCloudClient:
         resp = self._request("GET", f"/api/PurchaseOrders/{po_id}")
         return resp.json()
 
+    # Alias used by the single-PO sync endpoint in the purchase_orders router
+    def get_purchase_order_detail(self, po_id: int) -> dict:
+        return self.get_purchase_order(po_id)
+
+    def get(self, path: str, **params) -> dict:
+        """Generic GET helper (used by container sync endpoint and others)."""
+        resp = self._request("GET", path, params=params or None)
+        return resp.json()
+
     # ---------------- Shipping Containers ----------------
     def get_containers_for_po_product(self, po_id: int, product_id: str) -> dict:
         """
@@ -158,5 +167,70 @@ class SellerCloudClient:
         resp = self._request("GET", f"/api/ShippingContainers/{container_id}")
         return resp.json()
 
+    def create_shipping_container(self, payload: dict) -> dict:
+        """
+        Create a new shipping container in SellerCloud.
+        POST /api/ShippingContainers
+        
+        NOTE: Per the SC Swagger spec, this endpoint only accepts:
+          ContainerName, ReceivingWarehouseID, ShippingStatus, ShippedOn, EstimatedArrivalDate
+        Items CANNOT be passed here — use add_items_to_container() after creation.
+
+        Returns the raw SC response. The new container integer ID is in the
+        response body directly (SC returns a plain integer, not JSON).
+        """
+        # Strip Items out — SC doesn't accept them in the create payload
+        create_payload = {
+            "ContainerName": payload.get("ContainerName"),
+            "EstimatedArrivalDate": payload.get("EstimatedArrivalDate"),
+            "ShippedOn": payload.get("ReceivedDate"),  # map our ReceivedDate to ShippedOn
+            "ShippingStatus": 1,  # 1 = NotArrived (default for new containers)
+        }
+        # Remove None values
+        create_payload = {k: v for k, v in create_payload.items() if v is not None}
+
+        resp = self._request("POST", "/api/ShippingContainers", json=create_payload)
+        self._last_create_status = resp.status_code
+        self._last_create_raw = resp.text
+
+        try:
+            parsed = resp.json()
+            # SC may return a plain integer (the new container ID)
+            if isinstance(parsed, int):
+                return {"ID": parsed}
+            return parsed
+        except Exception:
+            raw = resp.text.strip()
+            if raw.isdigit():
+                return {"ID": int(raw)}
+            return {"_raw_response": raw}
+
+    def add_items_to_container(self, container_id: int, items: list) -> None:
+        """
+        Add items to an existing container.
+        POST /api/ShippingContainers/{id}/Items
+
+        items: list of dicts with keys:
+          - PurchaseOrderID (int, required)
+          - PurchaseOrderItemID (int, required)
+          - Qty (int, required)
+        """
+        payload = {"Items": items}
+        self._request("POST", f"/api/ShippingContainers/{container_id}/Items", json=payload)
+
+    def search_containers_by_name(self, name: str) -> dict:
+        """
+        Search containers by name — used as fallback to recover the SC ID
+        when the create response doesn't include it explicitly.
+        GET /api/ShippingContainers?model.containerNames={name}
+        """
+        resp = self._request(
+            "GET",
+            "/api/ShippingContainers",
+            params={"model.containerNames": name},
+        )
+        return resp.json()
+
 
 sellercloud_client = SellerCloudClient()
+
