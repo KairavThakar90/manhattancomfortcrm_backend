@@ -5,7 +5,7 @@ from sqlalchemy import (
     Column, String, Boolean, DateTime, ForeignKey, Numeric, Integer, Text
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 
 from app.database import Base
 
@@ -38,7 +38,7 @@ class Company(Base):
     postal_code = Column(String(20))
     country = Column(String(120))
     is_active = Column(Boolean, default=True)
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -61,7 +61,7 @@ class Vendor(Base):
     country = Column(String(120))
     is_active = Column(Boolean, default=True)
     container_lead_time_days = Column(Integer)  # days from payment/order to first container arrival, set per vendor
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -88,7 +88,7 @@ class Customer(Base):
     shipping_state = Column(String(120))
     shipping_postal_code = Column(String(20))
     shipping_country = Column(String(120))
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -114,7 +114,7 @@ class PurchaseOrder(Base):
     total_amount = Column(Numeric(14, 2))
     currency = Column(String(10), default="USD")
     notes = Column(Text)
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -141,7 +141,7 @@ class PurchaseOrderItem(Base):
     is_bundle_component = Column(Boolean, default=False)
     parent_sellercloud_item_id = Column(Integer)
     expected_delivery_date = Column(DateTime(timezone=True))
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     purchase_order = relationship("PurchaseOrder", back_populates="items")
@@ -156,7 +156,7 @@ class ShippingContainer(Base):
     container_name = Column(String(255))
     estimated_arrival_date = Column(DateTime(timezone=True))  # ETA from SellerCloud
     received_date = Column(DateTime(timezone=True))  # Actual received date from SellerCloud
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -170,7 +170,7 @@ class PurchaseOrderItemContainer(Base):
     purchase_order_item_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_items.id", ondelete="CASCADE"), nullable=False)
     shipping_container_id = Column(UUID(as_uuid=True), ForeignKey("shipping_containers.id", ondelete="CASCADE"), nullable=False)
     qty_in_container = Column(Integer, default=0)
-    raw_json = Column(JSONB)
+    raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     item = relationship("PurchaseOrderItem", back_populates="container_links")
