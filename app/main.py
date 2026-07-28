@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import auth, companies, containers, customers, vendors, purchase_orders
+from app.routers import auth, companies, customers, vendors, purchase_orders, containers
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
 

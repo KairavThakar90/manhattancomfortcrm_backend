@@ -253,25 +253,39 @@ def _get_or_create_vendor(db: Session, vendor_sc_id):
 
 def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
     """
-    Confirmed structure of detail["Items"][x] (verified against a real response):
-      ID, PurchaseID, ProductID (= SKU), ProductName, QtyOrdered, QtyReceived,
-      QtyInContainer (null until the PO ships - not a bug), UnitPrice,
-      QtyPerCase, TotalCases (= qty_cases_ordered), CostPerCase, IsKit,
-      ExpectedDeliveryDate.
+    Upserts PO line items — UPDATE existing rows matched by sellercloud_item_id,
+    INSERT new ones.  This replaces the old delete-all-then-insert pattern so that
+    PurchaseOrderItemContainer rows (container links) are NEVER wiped when a PO is
+    re-synced.
 
-    Kit/bundle components: IsKit=true marks a kit item, but we haven't seen a
-    real kit PO yet to confirm where its components live (possibly nested
-    under a different key than "Items"). Falls back to checking li.get("Items")
-    defensively - update this once a kit PO is inspected via debug_po_detail.py.
+    Confirmed structure of detail["Items"][x]:
+      ID, PurchaseID, ProductID (= SKU), ProductName, QtyOrdered, QtyReceived,
+      QtyInContainer, UnitPrice, QtyPerCase, TotalCases, CostPerCase, IsKit,
+      ExpectedDeliveryDate.
     """
     for li in items:
-        db.add(models.PurchaseOrderItem(
+        sc_item_id = li.get("ID")
+        existing = None
+        if sc_item_id:
+            existing = (
+                db.query(models.PurchaseOrderItem)
+                .filter(
+                    models.PurchaseOrderItem.purchase_order_id == po_row_id,
+                    models.PurchaseOrderItem.sellercloud_item_id == sc_item_id,
+                )
+                .first()
+            )
+
+        fields = dict(
             purchase_order_id=po_row_id,
-            sellercloud_item_id=li.get("ID"),
+            sellercloud_item_id=sc_item_id,
             sku=li.get("ProductID") or li.get("SKU"),
             product_name=li.get("ProductName"),
             qty_ordered=li.get("QtyOrdered", 0),
             qty_received=li.get("QtyReceived", 0),
+            # Only overwrite qty_in_container from SC if SC reports > 0.
+            # If SC returns 0/null it might just mean "not shipped yet" —
+            # we keep our locally-tracked value so container links stay accurate.
             qty_in_container=li.get("QtyInContainer") or 0,
             unit_price=li.get("UnitPrice", 0),
             qty_cases_ordered=li.get("TotalCases", 0),
@@ -281,11 +295,19 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
             parent_sellercloud_item_id=parent_item_id,
             expected_delivery_date=li.get("ExpectedDeliveryDate"),
             raw_json=li,
-        ))
+        )
+
+        if existing:
+            # UPDATE — preserve the row so container_links FK is not broken
+            for k, v in fields.items():
+                if k != "purchase_order_id":  # never change parent FK
+                    setattr(existing, k, v)
+        else:
+            db.add(models.PurchaseOrderItem(**fields))
 
         nested = li.get("Items") or []
         if nested:
-            _upsert_items(db, po_row_id, nested, parent_item_id=li.get("ID"))
+            _upsert_items(db, po_row_id, nested, parent_item_id=sc_item_id)
 
 
 def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100) -> int:
@@ -348,9 +370,8 @@ def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100)
 
             line_items = detail.get("Items") or []
             if line_items:
-                db.query(models.PurchaseOrderItem).filter(
-                    models.PurchaseOrderItem.purchase_order_id == po.id
-                ).delete()
+                # Use upsert (not delete+insert) so PurchaseOrderItemContainer
+                # rows (container links) are never wiped on re-sync.
                 _upsert_items(db, po.id, line_items)
 
             db.commit()
@@ -425,11 +446,27 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                 detail = sellercloud_client.get_container(container_sc_id)
                 details_section = detail.get("Details") or {}
 
+                # Look up by SC container ID first
                 container = (
                     db.query(models.ShippingContainer)
                     .filter(models.ShippingContainer.sellercloud_container_id == container_sc_id)
                     .first()
                 )
+                # Fallback: if we created this container locally but the SC sync
+                # failed, the local row has sellercloud_container_id=NULL but the
+                # same name.  Match by name to avoid creating a duplicate row.
+                if not container:
+                    sc_name = details_section.get("ContainerName")
+                    if sc_name:
+                        container = (
+                            db.query(models.ShippingContainer)
+                            .filter(
+                                models.ShippingContainer.container_name == sc_name,
+                                models.ShippingContainer.sellercloud_container_id.is_(None),
+                            )
+                            .first()
+                        )
+
                 container_fields = dict(
                     sellercloud_container_id=container_sc_id,
                     container_name=details_section.get("ContainerName"),
@@ -557,90 +594,3 @@ def sync_containers_for_all_pos(db: Session, limit: int = None) -> dict:
         "containers_synced": total_containers,
         "links_synced": total_links
     }
-
-    item_by_sc_id = {it.sellercloud_item_id: it for it in items if it.sellercloud_item_id}
-
-    seen_container_ids = set()
-    checked_pairs = set()
-    containers_synced = 0
-    links_synced = 0
-
-    try:
-        for it in items:
-            po = it.purchase_order
-            pair = (po.sellercloud_po_id, it.sku)
-            if pair in checked_pairs or not po.sellercloud_po_id:
-                continue
-            checked_pairs.add(pair)
-
-            resp = sellercloud_client.get_containers_for_po_product(po.sellercloud_po_id, it.sku)
-            candidates = resp.get("Items") or []
-
-            for c in candidates:
-                container_sc_id = c.get("ID")
-                if not container_sc_id or container_sc_id in seen_container_ids:
-                    continue
-                seen_container_ids.add(container_sc_id)
-
-                detail = sellercloud_client.get_container(container_sc_id)
-                details_section = detail.get("Details") or {}
-
-                container = (
-                    db.query(models.ShippingContainer)
-                    .filter(models.ShippingContainer.sellercloud_container_id == container_sc_id)
-                    .first()
-                )
-                container_fields = dict(
-                    sellercloud_container_id=container_sc_id,
-                    container_name=details_section.get("ContainerName"),
-                    estimated_arrival_date=details_section.get("EstimatedArrivalDate"),
-                    received_date=details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate"),
-                    raw_json=detail,
-                )
-                if container:
-                    for k, v in container_fields.items():
-                        setattr(container, k, v)
-                else:
-                    container = models.ShippingContainer(**container_fields)
-                    db.add(container)
-                    db.flush()
-                containers_synced += 1
-
-                results = ((detail.get("Items") or {}).get("Results")) or []
-                for entry in results:
-                    match = item_by_sc_id.get(entry.get("POItemID"))
-                    if not match:
-                        continue  # this container item belongs to a PO/item we haven't synced locally - skip
-
-                    existing_link = (
-                        db.query(models.PurchaseOrderItemContainer)
-                        .filter(
-                            models.PurchaseOrderItemContainer.purchase_order_item_id == match.id,
-                            models.PurchaseOrderItemContainer.shipping_container_id == container.id,
-                        )
-                        .first()
-                    )
-                    link_fields = dict(
-                        purchase_order_item_id=match.id,
-                        shipping_container_id=container.id,
-                        qty_in_container=entry.get("Qty", 0),
-                        raw_json=entry,
-                    )
-                    if existing_link:
-                        for k, v in link_fields.items():
-                            setattr(existing_link, k, v)
-                    else:
-                        db.add(models.PurchaseOrderItemContainer(**link_fields))
-                    links_synced += 1
-
-            db.commit()
-
-        print(f"[sync_containers] done. {containers_synced} containers, {links_synced} item links.")
-        _log_sync(db, "shipping_containers", "success", containers_synced)
-    except Exception as e:
-        db.rollback()
-        print(f"[sync_containers] FAILED after {containers_synced} containers: {e}")
-        _log_sync(db, "shipping_containers", "failed", containers_synced, str(e))
-        raise
-
-    return {"containers_synced": containers_synced, "links_synced": links_synced}
