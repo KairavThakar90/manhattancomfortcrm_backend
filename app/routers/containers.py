@@ -13,6 +13,7 @@ from app import models
 from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
+    ContainerUpdate, ContainerAddItems
 )
 from app.services.sellercloud_client import SellerCloudClient
 
@@ -501,6 +502,156 @@ def create_container(
         response["sc_sync_error"] = sc_sync_error
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# PUT /containers/{container_id}
+# ---------------------------------------------------------------------------
+@router.put("/{container_id}")
+def update_container(
+    container_id: str,
+    update_data: ContainerUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    Update a container's name, estimated arrival date, or received date.
+    Syncs the update to SellerCloud and saves it locally.
+    """
+    container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == container_id).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    # If it's synced to SellerCloud, push the update
+    if container.sellercloud_container_id:
+        try:
+            sc_client = SellerCloudClient()
+            sc_payload = {
+                "ContainerName": update_data.container_name or container.container_name,
+                "EstimatedArrivalDate": update_data.estimated_arrival_date.isoformat() if update_data.estimated_arrival_date else (container.estimated_arrival_date.isoformat() if container.estimated_arrival_date else None),
+                "ReceivedDate": update_data.received_date.isoformat() if update_data.received_date else (container.received_date.isoformat() if container.received_date else None),
+                "ShippingStatus": 1 if not update_data.received_date else 2, # Example: 1=NotArrived, 2=Arrived
+            }
+            sc_client.update_shipping_container(container.sellercloud_container_id, sc_payload)
+        except Exception as exc:
+            print(f"Failed to update container {container.sellercloud_container_id} in SellerCloud: {exc}")
+            # We can optionally fail here or continue saving locally
+            # raise HTTPException(status_code=500, detail=f"SellerCloud sync failed: {exc}")
+
+    # Update local DB
+    if update_data.container_name is not None:
+        container.container_name = update_data.container_name
+    if update_data.estimated_arrival_date is not None:
+        container.estimated_arrival_date = update_data.estimated_arrival_date
+    if update_data.received_date is not None:
+        container.received_date = update_data.received_date
+
+    container.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(container)
+
+    return {
+        "success": True,
+        "message": "Container updated successfully",
+        "container": {
+            "id": str(container.id),
+            "container_name": container.container_name,
+            "estimated_arrival_date": container.estimated_arrival_date,
+            "received_date": container.received_date,
+            "sellercloud_container_id": container.sellercloud_container_id
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/items
+# ---------------------------------------------------------------------------
+@router.post("/{container_id}/items")
+def add_items_to_container(
+    container_id: str,
+    items_data: ContainerAddItems,
+    db: Session = Depends(get_db),
+):
+    """
+    Add items to an existing container. Syncs to SellerCloud and saves locally.
+    """
+    container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == container_id).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    resolved_items = []
+    
+    # 1. Resolve and validate items exactly like create_container
+    for item_data in items_data.items:
+        item = None
+        if item_data.po_item_id:
+            item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_data.po_item_id).options(joinedload(models.PurchaseOrderItem.purchase_order)).first()
+        elif item_data.sellercloud_item_id:
+            item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.sellercloud_item_id == item_data.sellercloud_item_id).options(joinedload(models.PurchaseOrderItem.purchase_order)).first()
+        elif item_data.sellercloud_po_id and item_data.sku:
+            item = db.query(models.PurchaseOrderItem).join(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == item_data.sellercloud_po_id, models.PurchaseOrderItem.sku == item_data.sku).options(joinedload(models.PurchaseOrderItem.purchase_order)).first()
+
+        if not item:
+            raise HTTPException(status_code=404, detail=f"PO item not found for data: {item_data}")
+
+        # Check availability
+        qty_rows = db.query(models.PurchaseOrderItemContainer.qty_in_container).filter(models.PurchaseOrderItemContainer.purchase_order_item_id == item.id).all()
+        qty_already_total = sum(r[0] or 0 for r in qty_rows)
+        qty_available = max(0, item.qty_ordered - qty_already_total)
+
+        if item_data.qty_in_container > qty_available:
+            raise HTTPException(status_code=400, detail=f"SKU '{item.sku}': requested {item_data.qty_in_container} but only {qty_available} available")
+
+        # Check if already in this container
+        existing_link = db.query(models.PurchaseOrderItemContainer).filter(models.PurchaseOrderItemContainer.purchase_order_item_id == item.id, models.PurchaseOrderItemContainer.shipping_container_id == container.id).first()
+        if existing_link:
+            raise HTTPException(status_code=400, detail=f"SKU '{item.sku}' is already in this container. Update functionality is not supported by this endpoint.")
+
+        resolved_items.append((item_data, item))
+
+    # 2. Sync to SellerCloud
+    if container.sellercloud_container_id:
+        try:
+            sc_client = SellerCloudClient()
+            sc_items = [
+                {
+                    "PurchaseOrderID": (item.purchase_order.sellercloud_po_id if item.purchase_order and item.purchase_order.sellercloud_po_id else item_data.sellercloud_po_id),
+                    "PurchaseOrderItemID": item.sellercloud_item_id or item_data.sellercloud_item_id,
+                    "Qty": item_data.qty_in_container,
+                }
+                for item_data, item in resolved_items
+            ]
+            sc_client.add_items_to_container(container.sellercloud_container_id, sc_items)
+        except Exception as exc:
+            print(f"Failed to add items to SC container {container.sellercloud_container_id}: {exc}")
+            raise HTTPException(status_code=500, detail=f"SellerCloud sync failed: {exc}")
+
+    # 3. Update local DB
+    linked_items_summary = []
+    for item_data, item in resolved_items:
+        db.add(
+            models.PurchaseOrderItemContainer(
+                purchase_order_item_id=item.id,
+                shipping_container_id=container.id,
+                qty_in_container=item_data.qty_in_container,
+                raw_json={"sc_payload_item": item_data.model_dump(mode="json")}
+            )
+        )
+        item.qty_in_container = (item.qty_in_container or 0) + item_data.qty_in_container
+        
+        linked_items_summary.append({
+            "sku": item.sku,
+            "qty_added": item_data.qty_in_container,
+            "total_item_qty_in_containers": item.qty_in_container
+        })
+
+    container.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Successfully added {len(resolved_items)} items to container",
+        "items_added": linked_items_summary
+    }
 
 
 # ---------------------------------------------------------------------------

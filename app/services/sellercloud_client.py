@@ -205,6 +205,31 @@ class SellerCloudClient:
                 return {"ID": int(raw)}
             return {"_raw_response": raw}
 
+    def update_shipping_container(self, container_id: int, payload: dict) -> dict:
+        """
+        Update an existing shipping container in SellerCloud.
+        PUT /api/ShippingContainers/{id}
+        """
+        update_payload = {
+            "ContainerName": payload.get("ContainerName"),
+            "EstimatedArrivalDate": payload.get("EstimatedArrivalDate"),
+            "ShippedOn": payload.get("ReceivedDate"),
+            "ShippingStatus": payload.get("ShippingStatus", 1),
+        }
+        # Remove None values
+        update_payload = {k: v for k, v in update_payload.items() if v is not None}
+        
+        resp = self._request("PUT", f"/api/ShippingContainers/{container_id}", json=update_payload)
+        
+        # SC returns empty body on success
+        if resp.status_code == 200:
+            return {"success": True}
+            
+        try:
+            return resp.json()
+        except Exception:
+            return {"_raw_response": resp.text}
+
     def add_items_to_container(self, container_id: int, items: list) -> None:
         """
         Add items to an existing container.

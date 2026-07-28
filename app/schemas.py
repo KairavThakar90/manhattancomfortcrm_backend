@@ -182,6 +182,16 @@ class ContainerCreate(BaseModel):
     items: List[ContainerItemCreate] = Field(min_length=1, description="List of items in this container")
 
 
+class ContainerUpdate(BaseModel):
+    container_name: Optional[str] = Field(default=None, min_length=1, max_length=255, description="Updated container name/number")
+    estimated_arrival_date: Optional[datetime] = Field(default=None, description="Updated expected arrival date")
+    received_date: Optional[datetime] = Field(default=None, description="Updated actual received date")
+
+
+class ContainerAddItems(BaseModel):
+    items: List[ContainerItemCreate] = Field(min_length=1, description="List of items to add to this container")
+
+
 # ---------- PO items for container creation ----------
 class POItemForContainerOut(BaseModel):
     """Shape of one PO line item when building a new container."""
@@ -394,4 +404,3 @@ class SyncResponse(BaseModel):
 
 class POExportRequest(BaseModel):
     po_ids: list[int]
-

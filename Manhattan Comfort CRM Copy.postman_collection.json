@@ -1,0 +1,2077 @@
+{
+    "info": {
+        "_postman_id": "6512b3b0-603a-4312-9306-c9e211f09a4a",
+        "name": "Manhattan Comfort CRM Copy",
+        "description": "API collection for Manhattan Comfort CRM. Folders: Auth, Purchase Orders, Containers, Vendors, Companies. Tokens auto-save via Tests scripts.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "_exporter_id": "55975980",
+        "_collection_link": "https://go.postman.co/collection/55975980-6512b3b0-603a-4312-9306-c9e211f09a4a?source=collection_link"
+    },
+    "item": [
+        {
+            "name": "Your API",
+            "item": [
+                {
+                    "name": "Auth",
+                    "item": [
+                        {
+                            "name": "Login (get JWT)",
+                            "event": [
+                                {
+                                    "listen": "test",
+                                    "script": {
+                                        "type": "text/javascript",
+                                        "exec": [
+                                            "if(pm.response.code===200){const j=pm.response.json();pm.collectionVariables.set('api_token',j.access_token);pm.collectionVariables.set('api_refresh_token',j.refresh_token);console.log('Tokens saved.');}"
+                                        ]
+                                    }
+                                }
+                            ],
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/x-www-form-urlencoded"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "urlencoded",
+                                    "urlencoded": [
+                                        {
+                                            "key": "username",
+                                            "value": "{{api_email}}",
+                                            "type": "text"
+                                        },
+                                        {
+                                            "key": "password",
+                                            "value": "{{api_password}}",
+                                            "type": "text"
+                                        }
+                                    ]
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/auth/login",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "auth",
+                                        "login"
+                                    ]
+                                },
+                                "description": "OAuth2 password flow. Auto-saves api_token and api_refresh_token."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Refresh Token",
+                            "event": [
+                                {
+                                    "listen": "test",
+                                    "script": {
+                                        "type": "text/javascript",
+                                        "exec": [
+                                            "if(pm.response.code===200){const j=pm.response.json();pm.collectionVariables.set('api_token',j.access_token);pm.collectionVariables.set('api_refresh_token',j.refresh_token);}"
+                                        ]
+                                    }
+                                }
+                            ],
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/json"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"refresh_token\": \"{{api_refresh_token}}\"\n}"
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/auth/refresh",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "auth",
+                                        "refresh"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Logout",
+                            "event": [
+                                {
+                                    "listen": "test",
+                                    "script": {
+                                        "type": "text/javascript",
+                                        "exec": [
+                                            "pm.collectionVariables.set('api_token','');pm.collectionVariables.set('api_refresh_token','');"
+                                        ]
+                                    }
+                                }
+                            ],
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/auth/logout",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "auth",
+                                        "logout"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Register (Create User)",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/json"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"email\": \"newuser@example.com\",\n  \"password\": \"securepassword123\",\n  \"full_name\": \"New User\",\n  \"role\": \"user\"\n}"
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/auth/register",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "auth",
+                                        "register"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Get Current User (Me)",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/auth/me",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "auth",
+                                        "me"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        }
+                    ],
+                    "description": "Login, token refresh, logout, and user management."
+                },
+                {
+                    "name": "Purchase Orders",
+                    "item": [
+                        {
+                            "name": "List Purchase Orders",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders?page=1&page_size=25",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "page",
+                                            "value": "1"
+                                        },
+                                        {
+                                            "key": "page_size",
+                                            "value": "25"
+                                        },
+                                        {
+                                            "key": "status_code",
+                                            "value": "",
+                                            "description": "Filter by PO status code",
+                                            "disabled": true
+                                        },
+                                        {
+                                            "key": "vendor_id",
+                                            "value": "",
+                                            "description": "Filter by vendor UUID",
+                                            "disabled": true
+                                        },
+                                        {
+                                            "key": "sort_by",
+                                            "value": "date_ordered",
+                                            "description": "Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount",
+                                            "disabled": true
+                                        },
+                                        {
+                                            "key": "sort_order",
+                                            "value": "desc",
+                                            "description": "Sort order: asc (ascending) or desc (descending)",
+                                            "disabled": true
+                                        }
+                                    ]
+                                },
+                                "description": "Paginated list of all purchase orders."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Get Purchase Order by ID",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/:po_id",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        ":po_id"
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "po_id",
+                                            "value": "",
+                                            "description": "Local UUID of the PO"
+                                        }
+                                    ]
+                                },
+                                "description": "Full PO detail including all items and their container assignments."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync All POs from SellerCloud",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/sync?view_id={{sc_view_id}}",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "sync"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "view_id",
+                                            "value": "{{sc_view_id}}"
+                                        }
+                                    ]
+                                },
+                                "description": "Two-pass sync: collects PO IDs from GetAllByView, then fetches full detail for each.\n\nSafe to run multiple times — container links are preserved (upsert, not delete+insert)."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync All POs from SellerCloud for last7 days",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/sync?view_id={{sc_view_id}}",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "sync"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "view_id",
+                                            "value": "{{sc_view_id}}"
+                                        }
+                                    ]
+                                },
+                                "description": "Two-pass sync: collects PO IDs from GetAllByView, then fetches full detail for each.\n\nSafe to run multiple times — container links are preserved (upsert, not delete+insert)."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync Single PO from SellerCloud",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/:sellercloud_po_id/sync",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        ":sellercloud_po_id",
+                                        "sync"
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "sellercloud_po_id",
+                                            "value": "12345",
+                                            "description": "SellerCloud integer PO ID"
+                                        }
+                                    ]
+                                },
+                                "description": "Sync one specific PO. Container links preserved."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync Containers for Specific PO",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/:sellercloud_po_id/sync-containers",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        ":sellercloud_po_id",
+                                        "sync-containers"
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "sellercloud_po_id",
+                                            "value": "12345"
+                                        }
+                                    ]
+                                },
+                                "description": "Pull container data from SellerCloud for all items in this PO."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync Containers for ALL POs",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/sync-containers?limit=10",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "sync-containers"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "limit",
+                                            "value": "10",
+                                            "description": "Remove limit param for full sync"
+                                        }
+                                    ]
+                                },
+                                "description": "Bulk container sync across all POs. Use limit=10 for testing."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync Containers for ALL POs for last 7days",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/sync-containers?limit=10",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "sync-containers"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "limit",
+                                            "value": "10",
+                                            "description": "Remove limit param for full sync"
+                                        }
+                                    ]
+                                },
+                                "description": "Bulk container sync across all POs. Use limit=10 for testing."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Update PO Lead Time",
+                            "request": {
+                                "method": "PATCH",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/:sellercloud_po_id/lead-time?container_lead_time_days=45",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        ":sellercloud_po_id",
+                                        "lead-time"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "container_lead_time_days",
+                                            "value": "45"
+                                        }
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "sellercloud_po_id",
+                                            "value": "12345"
+                                        }
+                                    ]
+                                },
+                                "description": "Set how many days from invoice date to expected container arrival for this PO."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Filter — All 4 Categories",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/filters/all?page=1&page_size=25",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "filters",
+                                        "all"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "page",
+                                            "value": "1"
+                                        },
+                                        {
+                                            "key": "page_size",
+                                            "value": "25"
+                                        },
+                                        {
+                                            "key": "filter_type",
+                                            "value": "delivery_overdue",
+                                            "description": "new_without_invoice | invoice_delayed | delivery_overdue | remaining_items",
+                                            "disabled": true
+                                        },
+                                        {
+                                            "key": "vendor_id",
+                                            "value": "",
+                                            "disabled": true
+                                        }
+                                    ]
+                                },
+                                "description": "Returns new_arrivals, invoice_delayed, delivery_overdue, remaining_items.\nAdd ?filter_type= to get a single category."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Flag — Missing Invoice",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/flags/missing-invoice?days_threshold=10&page=1&page_size=25",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "flags",
+                                        "missing-invoice"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "days_threshold",
+                                            "value": "10"
+                                        },
+                                        {
+                                            "key": "page",
+                                            "value": "1"
+                                        },
+                                        {
+                                            "key": "page_size",
+                                            "value": "25"
+                                        }
+                                    ]
+                                },
+                                "description": "POs older than X days with no invoice date."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Flag — Overdue Containers",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/flags/overdue-containers?page=1&page_size=25",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "flags",
+                                        "overdue-containers"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "page",
+                                            "value": "1"
+                                        },
+                                        {
+                                            "key": "page_size",
+                                            "value": "25"
+                                        }
+                                    ]
+                                },
+                                "description": "POs where invoice_date + lead_time_days < today."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Status Counts Summary",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/summary/status-counts",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "summary",
+                                        "status-counts"
+                                    ]
+                                },
+                                "description": "Dashboard counts: total POs, delayed invoices, overdue containers."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Export Single PO to CSV",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}",
+                                        "type": "text"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/:sellercloud_po_id/export/csv",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        ":sellercloud_po_id",
+                                        "export",
+                                        "csv"
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "sellercloud_po_id",
+                                            "value": "12246",
+                                            "description": "SellerCloud Purchase Order ID"
+                                        }
+                                    ]
+                                },
+                                "description": "Export a single PO with all its header, line item, and container details to a downloadable CSV file."
+                            }
+                        },
+                        {
+                            "name": "Export Multiple POs to CSV",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}",
+                                        "type": "text"
+                                    },
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/json",
+                                        "type": "text"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"po_ids\": [\n    12246,\n    12245\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/purchase-orders/export/csv",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "purchase-orders",
+                                        "export",
+                                        "csv"
+                                    ]
+                                },
+                                "description": "Export multiple POs to a single downloadable CSV by passing a JSON body array. Each row is a line item, repeating PO header information."
+                            }
+                        }
+                    ],
+                    "description": "View, filter, sync Purchase Orders and their containers."
+                },
+                {
+                    "name": "Containers",
+                    "item": [
+                        {
+                            "name": "📋 View Containers",
+                            "item": [
+                                {
+                                    "name": "List All Containers (paginated)",
+                                    "event": [
+                                        {
+                                            "listen": "test",
+                                            "script": {
+                                                "type": "text/javascript",
+                                                "exec": [
+                                                    "if(pm.response.code===200){",
+                                                    "  const j=pm.response.json();",
+                                                    "  console.log(`Total: ${j.total} | Page: ${j.page}/${j.meta.total_pages}`);",
+                                                    "  j.results.forEach(c => {",
+                                                    "    const status = c.is_received ? '✅ RECEIVED' : '🚢 PENDING';",
+                                                    "    console.log(`${status} | ${c.container_name} | Items: ${c.total_items} | Qty: ${c.total_qty_in_container} | POs: ${c.unique_pos}`);",
+                                                    "  });",
+                                                    "}"
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/?page=1&page_size=25",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ""
+                                            ],
+                                            "query": [
+                                                {
+                                                    "key": "page",
+                                                    "value": "1"
+                                                },
+                                                {
+                                                    "key": "page_size",
+                                                    "value": "25"
+                                                },
+                                                {
+                                                    "key": "received",
+                                                    "value": "false",
+                                                    "description": "true=received only | false=pending only | omit=all",
+                                                    "disabled": true
+                                                },
+                                                {
+                                                    "key": "search",
+                                                    "value": "",
+                                                    "description": "Partial container name search",
+                                                    "disabled": true
+                                                },
+                                                {
+                                                    "key": "sellercloud_po_id",
+                                                    "value": "",
+                                                    "description": "Filter by SC PO integer ID",
+                                                    "disabled": true
+                                                },
+                                                {
+                                                    "key": "po_id",
+                                                    "value": "",
+                                                    "description": "Filter by PO UUID",
+                                                    "disabled": true
+                                                },
+                                                {
+                                                    "key": "vendor_id",
+                                                    "value": "",
+                                                    "description": "Filter by vendor UUID",
+                                                    "disabled": true
+                                                }
+                                            ]
+                                        },
+                                        "description": "Paginated container list with filters.\n\n**Each result includes:**\n- `is_received` — true/false based on received_date\n- `total_items` — distinct SKUs in the container\n- `total_qty_in_container` — total units\n- `total_qty_received` — units received from SC\n- `unique_pos` — number of distinct POs\n\n**Filter examples:**\n- Pending (not received): `?received=false`\n- Received: `?received=true`\n- Search by name: `?search=SUDU`\n- For a specific PO: `?sellercloud_po_id=12345`\n\nCheck Postman Console for formatted output."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "List Pending Containers (not received)",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/?page=1&page_size=25&received=false",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ""
+                                            ],
+                                            "query": [
+                                                {
+                                                    "key": "page",
+                                                    "value": "1"
+                                                },
+                                                {
+                                                    "key": "page_size",
+                                                    "value": "25"
+                                                },
+                                                {
+                                                    "key": "received",
+                                                    "value": "false"
+                                                }
+                                            ]
+                                        },
+                                        "description": "All containers still in transit — received_date is NULL."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "List Received Containers",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/?page=1&page_size=25&received=true",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ""
+                                            ],
+                                            "query": [
+                                                {
+                                                    "key": "page",
+                                                    "value": "1"
+                                                },
+                                                {
+                                                    "key": "page_size",
+                                                    "value": "25"
+                                                },
+                                                {
+                                                    "key": "received",
+                                                    "value": "true"
+                                                }
+                                            ]
+                                        },
+                                        "description": "All containers that have been received."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "Search Containers by Name",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/?search=CONT&page=1&page_size=25",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ""
+                                            ],
+                                            "query": [
+                                                {
+                                                    "key": "search",
+                                                    "value": "CONT"
+                                                },
+                                                {
+                                                    "key": "page",
+                                                    "value": "1"
+                                                },
+                                                {
+                                                    "key": "page_size",
+                                                    "value": "25"
+                                                }
+                                            ]
+                                        },
+                                        "description": "Search containers by name — partial, case-insensitive."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "Container Summary Counts",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/summary/counts",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                "summary",
+                                                "counts"
+                                            ]
+                                        },
+                                        "description": "Quick dashboard counts.\n\nReturns:\n- `total` — all containers\n- `received` — with received_date set\n- `pending` — no received_date (in transit)\n- `synced_to_sc` — has SellerCloud ID\n- `local_only` — created locally, SC sync failed"
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "Get Container Details",
+                                    "event": [
+                                        {
+                                            "listen": "test",
+                                            "script": {
+                                                "type": "text/javascript",
+                                                "exec": [
+                                                    "if(pm.response.code===200){",
+                                                    "  const j=pm.response.json();",
+                                                    "  const status=j.is_received?'✅ RECEIVED':'🚢 PENDING';",
+                                                    "  console.log(`${status} | ${j.container_name}`);",
+                                                    "  console.log(`ETA: ${j.estimated_arrival_date || 'N/A'} | Received: ${j.received_date || 'Not yet'}`);",
+                                                    "  console.log(`Items: ${j.summary.total_items} | Qty: ${j.summary.total_qty_in_container} | Fully received: ${j.summary.fully_received_items}/${j.summary.total_items}`);",
+                                                    "  console.log('--- Items ---');",
+                                                    "  j.items.forEach(i => {",
+                                                    "    const rcv=i.is_fully_received?'✅':'⏳';",
+                                                    "    console.log(`${rcv} ${i.sku} | ${i.product_name} | in_container:${i.qty_in_container} | received:${i.qty_received}/${i.qty_ordered} | PO:${i.sellercloud_po_id}`);",
+                                                    "  });",
+                                                    "}"
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/:container_id/details",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ":container_id",
+                                                "details"
+                                            ],
+                                            "variable": [
+                                                {
+                                                    "key": "container_id",
+                                                    "value": "",
+                                                    "description": "Container UUID"
+                                                }
+                                            ]
+                                        },
+                                        "description": "Full container detail with all items.\n\nReturns:\n- `is_received` — true/false\n- `summary`: total_items, total_qty_in_container, total_qty_received, unique_purchase_orders, fully_received_items, pending_items\n- `items[]`: each SKU with sku, product_name, po_title, vendor_name, qty_in_container, qty_ordered, qty_received, qty_remaining, is_fully_received\n\nCheck Console for formatted output."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "Get Containers for PO",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/by-po/:sellercloud_po_id",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                "by-po",
+                                                ":sellercloud_po_id"
+                                            ],
+                                            "variable": [
+                                                {
+                                                    "key": "sellercloud_po_id",
+                                                    "value": "12345",
+                                                    "description": "SellerCloud PO integer ID"
+                                                }
+                                            ]
+                                        },
+                                        "description": "All containers associated with a specific PO, grouped with only the items from that PO.\n\nUseful for a 'Containers for PO #12345' view."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "List Containers for PO (filter)",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/?sellercloud_po_id=12345&page=1&page_size=25",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ""
+                                            ],
+                                            "query": [
+                                                {
+                                                    "key": "sellercloud_po_id",
+                                                    "value": "12345"
+                                                },
+                                                {
+                                                    "key": "page",
+                                                    "value": "1"
+                                                },
+                                                {
+                                                    "key": "page_size",
+                                                    "value": "25"
+                                                }
+                                            ]
+                                        },
+                                        "description": "Alternative: use the main list endpoint filtered by PO ID — returns paginated results with summary counts."
+                                    },
+                                    "response": []
+                                }
+                            ],
+                            "description": "Browse and inspect existing containers."
+                        },
+                        {
+                            "name": "🔄 Create Container Workflow",
+                            "item": [
+                                {
+                                    "name": "STEP 1 — Get PO Items for Container",
+                                    "event": [
+                                        {
+                                            "listen": "test",
+                                            "script": {
+                                                "type": "text/javascript",
+                                                "exec": [
+                                                    "if(pm.response.code===200){",
+                                                    "  const j=pm.response.json();",
+                                                    "  console.log(`PO: ${j.sellercloud_po_id} | ${j.po_title}`);",
+                                                    "  console.log(`Vendor: ${j.vendor_name}`);",
+                                                    "  console.log('--- Copy po_item_id values into STEP 2 body ---');",
+                                                    "  j.items.forEach((item,i)=>{",
+                                                    "    console.log(`[${i+1}] SKU:${item.sku} | ${item.product_name}`);",
+                                                    "    console.log(`     ordered:${item.qty_ordered} | received:${item.qty_received} | already_in_containers:${item.qty_already_in_containers} | AVAILABLE:${item.qty_available_for_container}`);",
+                                                    "    console.log(`     po_item_id: ${item.po_item_id}`);",
+                                                    "  });",
+                                                    "  console.log('--- Summary ---');",
+                                                    "  console.log(JSON.stringify(j.summary,null,2));",
+                                                    "}"
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/po-items/:sellercloud_po_id",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                "po-items",
+                                                ":sellercloud_po_id"
+                                            ],
+                                            "variable": [
+                                                {
+                                                    "key": "sellercloud_po_id",
+                                                    "value": "12345",
+                                                    "description": "⚠️ Replace with your real SellerCloud PO integer ID"
+                                                }
+                                            ]
+                                        },
+                                        "description": "Returns all line items in the PO with available quantities for container assignment.\n\nFor each item:\n- `po_item_id` — UUID to use in STEP 2 body\n- `qty_available_for_container` — max you can add (ordered - already_in_containers)\n- `existing_containers` — containers this item is already in\n\nCheck Postman Console after running for formatted list."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "STEP 2 — Create Container + Sync to SellerCloud",
+                                    "event": [
+                                        {
+                                            "listen": "test",
+                                            "script": {
+                                                "type": "text/javascript",
+                                                "exec": [
+                                                    "if(pm.response.code===201){",
+                                                    "  const j=pm.response.json();",
+                                                    "  pm.collectionVariables.set('last_created_container_id',j.container.id);",
+                                                    "  console.log('✅ Container created!');",
+                                                    "  console.log('Local ID:', j.container.id);",
+                                                    "  console.log('SellerCloud ID:', j.container.sellercloud_container_id);",
+                                                    "  console.log('SC Synced:', j.sellercloud_synced);",
+                                                    "  if(j.sc_sync_error) console.warn('SC sync error:', j.sc_sync_error);",
+                                                    "  console.log('Items linked:', j.container.items_linked);",
+                                                    "  j.container.items.forEach(item=>{",
+                                                    "    console.log(` SKU:${item.sku} | qty_in_container:${item.qty_in_container} | total_in_containers:${item.total_item_qty_in_containers}`);",
+                                                    "  });",
+                                                    "}else{",
+                                                    "  console.error('Failed:', JSON.stringify(pm.response.json(),null,2));",
+                                                    "}"
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    "request": {
+                                        "method": "POST",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            },
+                                            {
+                                                "key": "Content-Type",
+                                                "value": "application/json"
+                                            }
+                                        ],
+                                        "body": {
+                                            "mode": "raw",
+                                            "raw": "{\n  \"container_name\": \"CONT-2026-001\",\n  \"estimated_arrival_date\": \"2026-09-15T00:00:00Z\",\n  \"received_date\": null,\n  \"items\": [\n    {\n      \"po_item_id\": \"PASTE-UUID-FROM-STEP-1-HERE\",\n      \"qty_in_container\": 50\n    },\n    {\n      \"po_item_id\": \"PASTE-ANOTHER-UUID-HERE\",\n      \"qty_in_container\": 30\n    }\n  ]\n}",
+                                            "options": {
+                                                "raw": {
+                                                    "language": "json"
+                                                }
+                                            }
+                                        },
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers"
+                                            ]
+                                        },
+                                        "description": "Creates the container locally AND syncs to SellerCloud (2-step: create + add items).\n\n**Before running:**\n1. Copy po_item_id values from STEP 1 Console output\n2. Set qty_in_container (must be ≤ qty_available_for_container)\n3. Set container_name to your real container number\n\n**Response includes:**\n- `sellercloud_synced` — true/false\n- `container.sellercloud_container_id` — SC ID (null if sync failed)\n- `sc_sync_error` — error if SC failed\n- Container UUID is auto-saved to {{last_created_container_id}}\n\n**Alternative identifiers (if no po_item_id):**\n```json\n{\"sellercloud_item_id\": 678, \"qty_in_container\": 50}\n{\"sellercloud_po_id\": 12345, \"sku\": \"SKU-001\", \"qty_in_container\": 50}\n```"
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "STEP 3 — Verify Container",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/{{last_created_container_id}}/details",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                "{{last_created_container_id}}",
+                                                "details"
+                                            ]
+                                        },
+                                        "description": "Confirm the container was saved correctly.\nUses {{last_created_container_id}} auto-saved by STEP 2.\n\nReturns full detail with items, quantities, and received status."
+                                    },
+                                    "response": []
+                                }
+                            ],
+                            "description": "Run these 3 requests IN ORDER to create a container from a PO and sync it to SellerCloud.\n\nStep 1 → Get PO items with available quantities\nStep 2 → Create container with quantities (auto-saves container_id)\nStep 3 → Verify the container was created correctly"
+                        },
+                        {
+                            "name": "🔧 Manage Containers",
+                            "item": [
+                                {
+                                    "name": "Re-Sync Container from SellerCloud",
+                                    "request": {
+                                        "method": "POST",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/:container_id/sync",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                ":container_id",
+                                                "sync"
+                                            ],
+                                            "variable": [
+                                                {
+                                                    "key": "container_id",
+                                                    "value": "",
+                                                    "description": "Container UUID"
+                                                }
+                                            ]
+                                        },
+                                        "description": "Re-pulls container info from SellerCloud: ContainerName, EstimatedArrivalDate, ReceivedOnDate.\n\nUse after changes made directly in SellerCloud (e.g. marked as received)."
+                                    },
+                                    "response": []
+                                },
+                                {
+                                    "name": "Get PO Items for Container (existing PO)",
+                                    "request": {
+                                        "method": "GET",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            }
+                                        ],
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/po-items/:sellercloud_po_id",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                "po-items",
+                                                ":sellercloud_po_id"
+                                            ],
+                                            "variable": [
+                                                {
+                                                    "key": "sellercloud_po_id",
+                                                    "value": "12345"
+                                                }
+                                            ]
+                                        },
+                                        "description": "Check current available quantities for a PO — useful to see how many items are still unassigned to containers."
+                                    },
+                                    "response": []
+                                }
+                            ],
+                            "description": "Sync and update existing containers."
+                        },
+                        {
+                            "name": "🔬 Debug",
+                            "item": [
+                                {
+                                    "name": "Debug — Test SC Create (no DB save)",
+                                    "event": [
+                                        {
+                                            "listen": "test",
+                                            "script": {
+                                                "type": "text/javascript",
+                                                "exec": [
+                                                    "const j=pm.response.json();",
+                                                    "const s1=j.step1_create_container;",
+                                                    "const s2=j.step2_add_items;",
+                                                    "console.log('=== STEP 1: Create Container ===');",
+                                                    "console.log('SC HTTP status:', s1.sc_status_code);",
+                                                    "console.log('SC raw response:', s1.sc_raw_response);",
+                                                    "console.log('Detected SC ID:', s1.detected_id);",
+                                                    "console.log('=== STEP 2: Add Items ===');",
+                                                    "console.log('SC HTTP status:', s2.sc_status_code);",
+                                                    "console.log('SC response:', s2.sc_raw_response);",
+                                                    "if(j.error) console.error('Error:', j.error);",
+                                                    "if(s1.detected_id){",
+                                                    "  console.log('✅ Container ID detected:', s1.detected_id);",
+                                                    "  if(s2.sc_status_code>=200&&s2.sc_status_code<300) console.log('✅ Items added successfully');",
+                                                    "  else console.warn('⚠️ Items step status:', s2.sc_status_code);",
+                                                    "}else{",
+                                                    "  console.warn('⚠️ No container ID detected — check sc_raw_response');",
+                                                    "}"
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    "request": {
+                                        "method": "POST",
+                                        "header": [
+                                            {
+                                                "key": "Authorization",
+                                                "value": "Bearer {{api_token}}"
+                                            },
+                                            {
+                                                "key": "Content-Type",
+                                                "value": "application/json"
+                                            }
+                                        ],
+                                        "body": {
+                                            "mode": "raw",
+                                            "raw": "{\n  \"container_name\": \"DEBUG-TEST-001\",\n  \"estimated_arrival_date\": \"2026-09-15T00:00:00Z\",\n  \"received_date\": null,\n  \"items\": [\n    {\n      \"po_item_id\": \"PASTE-UUID-FROM-STEP-1-HERE\",\n      \"qty_in_container\": 1\n    }\n  ]\n}",
+                                            "options": {
+                                                "raw": {
+                                                    "language": "json"
+                                                }
+                                            }
+                                        },
+                                        "url": {
+                                            "raw": "{{base_url}}/api/v1/containers/debug-sc-create",
+                                            "host": [
+                                                "{{base_url}}"
+                                            ],
+                                            "path": [
+                                                "api",
+                                                "v1",
+                                                "containers",
+                                                "debug-sc-create"
+                                            ]
+                                        },
+                                        "description": "Tests the two-step SC container creation WITHOUT saving to local DB.\n\nStep 1: POST /api/ShippingContainers (create container, name+dates only)\nStep 2: POST /api/ShippingContainers/{id}/Items (add items separately)\n\nThe response shows both steps — check Console for formatted output.\n\n⚠️ This DOES create a real container in SellerCloud. Delete it from SC afterwards."
+                                    },
+                                    "response": []
+                                }
+                            ],
+                            "description": "Test SellerCloud API calls without saving to local DB."
+                        },
+                        {
+                            "name": "Edit Container",
+                            "request": {
+                                "method": "PUT",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{access_token}}",
+                                        "type": "text"
+                                    },
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/json",
+                                        "type": "text"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n    \"container_name\": \"TEST-CONT-EDITED\",\n    \"estimated_arrival_date\": \"2026-09-15T00:00:00Z\"\n}"
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/containers/{{container_id}}",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "containers",
+                                        "{{container_id}}"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Add Items to Container",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{access_token}}",
+                                        "type": "text"
+                                    },
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/json",
+                                        "type": "text"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n    \"items\": [\n        {\n            \"po_item_id\": \"uuid-goes-here\",\n            \"qty_in_container\": 10\n        }\n    ]\n}"
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/containers/{{container_id}}/items",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "containers",
+                                        "{{container_id}}",
+                                        "items"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        }
+                    ],
+                    "description": "Full container management: list with filters, details, create workflow, sync, and SellerCloud debug.\n\nSub-folders:\n• 📋 View Containers — list, filter, detail, counts\n• 🔄 Create Container Workflow — 3-step guided creation\n• 🔧 Manage Containers — sync, update\n• 🔬 Debug — test SC calls"
+                },
+                {
+                    "name": "Vendors",
+                    "item": [
+                        {
+                            "name": "List Vendors",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/vendors?page=1&page_size=25",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "vendors"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "page",
+                                            "value": "1"
+                                        },
+                                        {
+                                            "key": "page_size",
+                                            "value": "25"
+                                        }
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Get Vendor by ID",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/vendors/:vendor_id",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "vendors",
+                                        ":vendor_id"
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "vendor_id",
+                                            "value": ""
+                                        }
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Update Vendor Lead Time",
+                            "request": {
+                                "method": "PATCH",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    },
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "application/json"
+                                    }
+                                ],
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"container_lead_time_days\": 45\n}"
+                                },
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/vendors/:vendor_id/lead-time",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "vendors",
+                                        ":vendor_id",
+                                        "lead-time"
+                                    ],
+                                    "variable": [
+                                        {
+                                            "key": "vendor_id",
+                                            "value": ""
+                                        }
+                                    ]
+                                },
+                                "description": "Set container lead time in days for a vendor."
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync Vendors from SellerCloud",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/vendors/sync",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "vendors",
+                                        "sync"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        }
+                    ],
+                    "description": "List, sync, and update vendors."
+                },
+                {
+                    "name": "Companies",
+                    "item": [
+                        {
+                            "name": "List Companies",
+                            "request": {
+                                "method": "GET",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/companies?page=1&page_size=25",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "companies"
+                                    ],
+                                    "query": [
+                                        {
+                                            "key": "page",
+                                            "value": "1"
+                                        },
+                                        {
+                                            "key": "page_size",
+                                            "value": "25"
+                                        }
+                                    ]
+                                }
+                            },
+                            "response": []
+                        },
+                        {
+                            "name": "Sync Companies from SellerCloud",
+                            "request": {
+                                "method": "POST",
+                                "header": [
+                                    {
+                                        "key": "Authorization",
+                                        "value": "Bearer {{api_token}}"
+                                    }
+                                ],
+                                "url": {
+                                    "raw": "{{base_url}}/api/v1/companies/sync",
+                                    "host": [
+                                        "{{base_url}}"
+                                    ],
+                                    "path": [
+                                        "api",
+                                        "v1",
+                                        "companies",
+                                        "sync"
+                                    ]
+                                }
+                            },
+                            "response": []
+                        }
+                    ],
+                    "description": "List and sync companies."
+                },
+                {
+                    "name": "Health Check",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/health",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "health"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "SellerCloud Direct",
+            "item": [
+                {
+                    "name": "Get SC Token",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "if(pm.response.code===200){pm.collectionVariables.set('sc_token',pm.response.json().access_token);console.log('sc_token saved');}"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"Username\": \"{{sc_username}}\",\n  \"Password\": \"{{sc_password}}\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/token",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "token"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "List POs by View (page 1)",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/PurchaseOrders/GetAllByView?viewID={{sc_view_id}}&pageNumber=1&pageSize=50",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "PurchaseOrders",
+                                "GetAllByView"
+                            ],
+                            "query": [
+                                {
+                                    "key": "viewID",
+                                    "value": "{{sc_view_id}}"
+                                },
+                                {
+                                    "key": "pageNumber",
+                                    "value": "1"
+                                },
+                                {
+                                    "key": "pageSize",
+                                    "value": "50"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get PO Detail (incl. QtyInContainer)",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/PurchaseOrders/{{sc_po_id}}",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "PurchaseOrders",
+                                "{{sc_po_id}}"
+                            ]
+                        },
+                        "description": "Set sc_po_id collection variable first. Only endpoint with QtyInContainer per item."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "List Shipping Containers (for PO + SKU)",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/ShippingContainers?model.poIds={{sc_po_id}}&model.productIds=SKU-001",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "ShippingContainers"
+                            ],
+                            "query": [
+                                {
+                                    "key": "model.poIds",
+                                    "value": "{{sc_po_id}}",
+                                    "description": "SC PO integer ID"
+                                },
+                                {
+                                    "key": "model.productIds",
+                                    "value": "SKU-001",
+                                    "description": "Replace with real SKU"
+                                },
+                                {
+                                    "key": "model.containerNames",
+                                    "value": "",
+                                    "description": "Search by container name",
+                                    "disabled": true
+                                }
+                            ]
+                        },
+                        "description": "Finds containers for a PO+SKU combo. Returns {Items:[{ID, ContainerName}], TotalResults}."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Shipping Container Detail",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/ShippingContainers/:container_id",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "ShippingContainers",
+                                ":container_id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "container_id",
+                                    "value": "",
+                                    "description": "SC container integer ID"
+                                }
+                            ]
+                        },
+                        "description": "Returns {Details:{ContainerName, EstimatedArrivalDate, ReceivedOnDate}, Items:{Results:[{ID, POItemID, Qty, POID, ProductID}]}}"
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create Shipping Container (SC only)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"ContainerName\": \"CONT-2026-001\",\n  \"EstimatedArrivalDate\": \"2026-09-15T00:00:00Z\",\n  \"ShippingStatus\": 1\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/ShippingContainers",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "ShippingContainers"
+                            ]
+                        },
+                        "description": "Step 1: Create container in SC (name + dates only, NO items in body).\nSC returns the new integer container ID.\n\nUse our API endpoint instead: POST /api/v1/containers — handles both steps automatically."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Add Items to SC Container",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"Items\": [\n    {\n      \"PurchaseOrderID\": 12345,\n      \"PurchaseOrderItemID\": 678,\n      \"Qty\": 50\n    },\n    {\n      \"PurchaseOrderID\": 12345,\n      \"PurchaseOrderItemID\": 679,\n      \"Qty\": 30\n    }\n  ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/ShippingContainers/:container_id/Items",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "ShippingContainers",
+                                ":container_id",
+                                "Items"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "container_id",
+                                    "value": "",
+                                    "description": "SC container integer ID from create response"
+                                }
+                            ]
+                        },
+                        "description": "Step 2: Add items to a container.\n\nRequired fields per item:\n- PurchaseOrderID — SC PO integer ID\n- PurchaseOrderItemID — SC PO line item integer ID (from PO detail Items[].ID)\n- Qty — quantity in this container"
+                    },
+                    "response": []
+                },
+                {
+                    "name": "List Vendors",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{sc_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{sc_base_url}}/api/Vendors?pageNumber=1&pageSize=50",
+                            "host": [
+                                "{{sc_base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "Vendors"
+                            ],
+                            "query": [
+                                {
+                                    "key": "pageNumber",
+                                    "value": "1"
+                                },
+                                {
+                                    "key": "pageSize",
+                                    "value": "50"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ],
+            "description": "Raw calls to SellerCloud. Run 'Get SC token' first — it auto-saves to {{sc_token}}."
+        }
+    ],
+    "variable": [
+        {
+            "key": "base_url",
+            "value": "http://localhost:8000"
+        },
+        {
+            "key": "api_email",
+            "value": "you@example.com"
+        },
+        {
+            "key": "api_password",
+            "value": "your_app_password"
+        },
+        {
+            "key": "api_token",
+            "value": ""
+        },
+        {
+            "key": "api_refresh_token",
+            "value": ""
+        },
+        {
+            "key": "sc_base_url",
+            "value": "https://cd.api.sellercloud.com/rest"
+        },
+        {
+            "key": "sc_username",
+            "value": "your_sellercloud_username"
+        },
+        {
+            "key": "sc_password",
+            "value": "your_sellercloud_password"
+        },
+        {
+            "key": "sc_token",
+            "value": ""
+        },
+        {
+            "key": "sc_view_id",
+            "value": "25"
+        },
+        {
+            "key": "sc_po_id",
+            "value": ""
+        },
+        {
+            "key": "last_created_container_id",
+            "value": ""
+        }
+    ]
+}
