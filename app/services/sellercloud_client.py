@@ -104,11 +104,14 @@ class SellerCloudClient:
 
     # ---------------- Customers ----------------
     def get_customers(self, page_number: int = 1, page_size: int = 100) -> dict:
-        resp = self._request(
-            "GET",
-            "/api/Customers",
-            params={"pageNumber": page_number, "pageSize": page_size},
-        )
+        """Fetch a page of customers."""
+        resp = self._request("GET", "/api/Customers", params={"pageNumber": page_number, "pageSize": page_size})
+        return resp.json()
+
+    # ---------------- Warehouses ----------------
+    def get_warehouses(self) -> dict:
+        """Fetch all warehouses."""
+        resp = self._request("GET", "/api/Warehouses", params={"pageSize": 100})
         return resp.json()
 
     # ---------------- Purchase Orders ----------------

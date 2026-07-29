@@ -174,7 +174,7 @@ def sync_companies(db: Session) -> int:
 # confirmed the enum mapping from Swagger (Admin > Purchase Orders in the SC UI
 # usually shows the text next to each code, e.g. via the dropdown filter).
 
-def _map_po(detail: dict) -> dict:
+def _map_po(detail: dict, wh_map: dict = None) -> dict:
     """
     Confirmed structure of GET /PurchaseOrders/{id} (nested, NOT flat like the
     list/GetAllByView response) - verified against a real response:
@@ -196,6 +196,10 @@ def _map_po(detail: dict) -> dict:
     invoices = vendor_invoice.get("Invoices") or []
     invoice_date = vendor_invoice.get("InvoiceDate") or (invoices[0].get("InvoiceDate") if invoices else None)
 
+    wh_map = wh_map or {}
+    warehouse_id = purchase.get("DefaultWarehouseID")
+    warehouse_name = wh_map.get(warehouse_id) if warehouse_id else None
+
     return dict(
         sellercloud_po_id=purchase.get("POId"),
         purchase_title=purchase.get("Description"),
@@ -208,6 +212,8 @@ def _map_po(detail: dict) -> dict:
         total_amount=total_info.get("GrandTotal") or 0,
         currency="USD",
         notes=vendor_invoice.get("Memo") or purchase.get("Instructions"),
+        warehouse_id=warehouse_id,
+        warehouse_name=warehouse_name,
         raw_json=detail,
     )
 
@@ -335,6 +341,14 @@ def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100)
             page += 1
 
         print(f"[sync_purchase_orders] total PO IDs collected across all pages: {len(po_ids)}")
+        
+        # Cache warehouses for this sync run
+        try:
+            wh_data = sellercloud_client.get_warehouses()
+            wh_map = {w.get("ID"): w.get("Name") for w in wh_data.get("Items", [])}
+        except Exception as e:
+            print(f"[sync_purchase_orders] WARNING: Could not fetch warehouses: {e}")
+            wh_map = {}
 
         for po_id in po_ids:
             detail = sellercloud_client.get_purchase_order(po_id)
@@ -346,7 +360,7 @@ def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100)
 
             vendor = _get_or_create_vendor(db, purchase.get("VendorId"))
             company = _get_or_create_company(db, purchase.get("CompanyId"))
-            mapped = _map_po(detail)
+            mapped = _map_po(detail, wh_map=wh_map)
             mapped["vendor_id"] = vendor.id if vendor else None
             mapped["company_id"] = company.id if company else None
 

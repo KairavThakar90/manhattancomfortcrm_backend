@@ -11,7 +11,7 @@ from sqlalchemy import and_, or_
 from app.database import get_db
 from app.auth import get_current_user
 from app import models
-from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest
+from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut
 from app.services.sync_service import sync_purchase_orders, sync_containers
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
 
@@ -270,18 +270,71 @@ def list_purchase_orders(
 
 @router.get("/{po_id}", response_model=PurchaseOrderOut)
 def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
+    import uuid
+    try:
+        po_uuid = uuid.UUID(po_id)
+        filter_clause = models.PurchaseOrder.id == po_uuid
+    except ValueError:
+        if po_id.isdigit():
+            filter_clause = models.PurchaseOrder.sellercloud_po_id == int(po_id)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+
     po = (
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user)
         )
-        .filter(models.PurchaseOrder.id == po_id)
+        .filter(filter_clause)
         .first()
     )
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
+        
+    # Map user_name for comments
+    for comment in po.comments:
+        if comment.user:
+            comment.user_name = comment.user.full_name or comment.user.email
+            
     return po
+
+
+@router.post("/{po_id}/comments", response_model=POCommentOut)
+def add_po_comment(
+    po_id: str,
+    comment_data: POCommentCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    import uuid
+    try:
+        po_uuid = uuid.UUID(po_id)
+        filter_clause = models.PurchaseOrder.id == po_uuid
+    except ValueError:
+        if po_id.isdigit():
+            filter_clause = models.PurchaseOrder.sellercloud_po_id == int(po_id)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+
+    po = db.query(models.PurchaseOrder).filter(filter_clause).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+        
+    new_comment = models.PurchaseOrderComment(
+        purchase_order_id=po.id,
+        user_id=current_user.id,
+        comment=comment_data.comment
+    )
+    db.add(new_comment)
+    db.commit()
+    db.refresh(new_comment)
+    
+    # Manually attach user_name for the response
+    new_comment.user_name = current_user.full_name or current_user.email
+    
+    return new_comment
 
 
 @router.get("/filters/all")

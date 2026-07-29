@@ -126,6 +126,12 @@ class ContainerOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @computed_field
+    def sellercloud_link(self) -> Optional[str]:
+        if self.sellercloud_container_id:
+            return f"https://cd.cwa.sellercloud.com/Purchasing/ShippingContainer.aspx?ContainerID={self.sellercloud_container_id}"
+        return None
+
 
 class ContainerListResponse(BaseModel):
     """Paginated container list response."""
@@ -165,6 +171,12 @@ class ContainerDetailOut(BaseModel):
     updated_at: Optional[datetime] = None
     summary: dict = {}
     items: List[ContainerDetailItemOut] = []
+
+    @computed_field
+    def sellercloud_link(self) -> Optional[str]:
+        if self.sellercloud_container_id:
+            return f"https://cd.cwa.sellercloud.com/Purchasing/ShippingContainer.aspx?ContainerID={self.sellercloud_container_id}"
+        return None
 
 
 class ContainerItemCreate(BaseModel):
@@ -277,12 +289,28 @@ class PurchaseOrderItemOut(BaseModel):
         return instance
 
 
+class POCommentCreate(BaseModel):
+    comment: str
+
+
+class POCommentOut(BaseModel):
+    id: uuid.UUID
+    comment: str
+    created_at: datetime
+    user_id: Optional[uuid.UUID] = None
+    user_name: Optional[str] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PurchaseOrderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     sellercloud_po_id: Optional[int] = None
     purchase_title: Optional[str] = None
     order_number: Optional[str] = None  # Extracted from purchase_title (number after #)
+    warehouse_id: Optional[int] = None
+    warehouse_name: Optional[str] = None
     purchase_order_status_code: Optional[int] = None
     receiving_status_code: Optional[int] = None
     status_label: Optional[str] = None
@@ -297,7 +325,13 @@ class PurchaseOrderOut(BaseModel):
     vendor_id: Optional[uuid.UUID] = None
     vendor: Optional[VendorSummary] = None  # Nested vendor information
     items: List[PurchaseOrderItemOut] = []
+    comments: List[POCommentOut] = []
     
+    @computed_field
+    def sellercloud_link(self) -> Optional[str]:
+        if self.sellercloud_po_id:
+            return f"https://cd.cwa.sellercloud.com/Orders/Orders_Details.aspx?ID={self.sellercloud_po_id}"
+        return None
     # Computed totals for all items
     total_item_count: Optional[int] = None  # Count of items in this PO
     total_qty_ordered: Optional[int] = None
