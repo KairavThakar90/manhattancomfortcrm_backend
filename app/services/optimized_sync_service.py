@@ -43,7 +43,7 @@ class OptimizedSyncService:
         Returns:
             dict with sync statistics
         """
-        from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items
+        from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items, _get_or_create_warehouse
         
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         
@@ -116,8 +116,13 @@ class OptimizedSyncService:
                     company = _get_or_create_company(self.db, purchase.get("CompanyId"))
                     
                     mapped = _map_po(detail)
+                    
+                    warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
+                    warehouse = _get_or_create_warehouse(self.db, warehouse_sc_id)
+                    
                     mapped["vendor_id"] = vendor.id if vendor else None
                     mapped["company_id"] = company.id if company else None
+                    mapped["warehouse_id"] = warehouse.id if warehouse else None
                     
                     # Check if PO exists
                     existing_po = (

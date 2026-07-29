@@ -97,6 +97,14 @@ class SellerCloudClient:
         )
         return resp.json()
     
+    # ---------------- Warehouses ----------------
+    def get_warehouses(self) -> dict:
+        resp = self._request(
+            "GET",
+            "/api/Warehouses",
+        )
+        return resp.json()
+
     def get_vendor(self, vendor_id: int) -> dict:
         """Get full vendor detail by ID."""
         resp = self._request("GET", f"/api/Vendors/{vendor_id}")

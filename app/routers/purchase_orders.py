@@ -1323,22 +1323,19 @@ def export_multiple_pos_csv(
     db: Session = Depends(get_db)
 ):
     """
-    Export multiple POs to a single CSV file.
-    
-    Provide a list of SellerCloud PO IDs in a JSON request body array to export.
-    All POs will be included in one CSV file with all their details.
-    
-    Example: POST /api/v1/purchase-orders/export/csv
-    Body: {"po_ids": [11880, 11881, 11882]}
-    
-    Returns a downloadable CSV file.
+    Export POs to a single CSV file.
+    Can be filtered by a list of PO IDs or by a specific filter status.
+    Columns can be customized.
     """
-    po_ids = request_data.po_ids
-    if not po_ids:
-        raise HTTPException(status_code=400, detail="No PO IDs provided")
-    
-    # Fetch all POs with related data
-    pos = (
+    if not request_data.po_ids and not request_data.filter_status:
+        raise HTTPException(status_code=400, detail="Must provide either po_ids or filter_status")
+
+    from datetime import timezone, timedelta
+    from sqlalchemy import and_
+    cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
+    today = datetime.now(timezone.utc).date()
+
+    base_q = (
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items)
@@ -1346,98 +1343,105 @@ def export_multiple_pos_csv(
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor)
         )
-        .filter(models.PurchaseOrder.sellercloud_po_id.in_(po_ids))
-        .all()
     )
-    
+
+    if request_data.po_ids:
+        pos = base_q.filter(models.PurchaseOrder.sellercloud_po_id.in_(request_data.po_ids)).all()
+    else:
+        status = request_data.filter_status
+        if status == 'invoice_delayed':
+            pos = base_q.filter(
+                and_(
+                    models.PurchaseOrder.invoice_date.is_(None),
+                    models.PurchaseOrder.created_on <= cutoff_10_days
+                )
+            ).order_by(models.PurchaseOrder.created_on.asc()).all()
+        elif status == 'delivery_delayed':
+            q = base_q.filter(
+                and_(
+                    models.PurchaseOrder.invoice_date.isnot(None),
+                    models.PurchaseOrder.container_lead_time_days.isnot(None)
+                )
+            ).all()
+            pos = [p for p in q if p.invoice_date and p.container_lead_time_days and (p.invoice_date.date() + timedelta(days=p.container_lead_time_days)) < today]
+        elif status == 'lefts_items':
+            q = base_q.join(models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id).distinct().all()
+            pos = []
+            for po in q:
+                po_model = PurchaseOrderOut.model_validate(po)
+                if po_model.total_qty_remaining and po_model.total_qty_remaining > 0:
+                    pos.append(po)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid filter_status")
+
     if not pos:
-        raise HTTPException(status_code=404, detail="No POs found with provided IDs")
-    
-    # Create CSV in memory
+        raise HTTPException(status_code=404, detail="No POs found")
+
     output = io.StringIO()
     writer = csv.writer(output)
+
+    # Column mapping logic
+    def get_container_info(item):
+        if not getattr(item, 'container_links', None):
+            return "", ""
+        containers = [link.container for link in item.container_links if link.container]
+        if not containers:
+            return "", ""
+        name = ", ".join([c.container_name or "" for c in containers])
+        eta = ", ".join([c.estimated_arrival_date.isoformat() if getattr(c, 'estimated_arrival_date', None) else "" for c in containers])
+        return name, eta
+
+    column_map = {
+        "PO ID": lambda p, i, c_name, c_eta: p.sellercloud_po_id,
+        "PO Title": lambda p, i, c_name, c_eta: p.purchase_title or "",
+        "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
+        "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
+        "Receiving Status": lambda p, i, c_name, c_eta: p.receiving_status_code or "",
+        "Created On": lambda p, i, c_name, c_eta: p.created_on.isoformat() if p.created_on else "",
+        "Date Ordered": lambda p, i, c_name, c_eta: p.date_ordered.isoformat() if p.date_ordered else "",
+        "Expected Delivery": lambda p, i, c_name, c_eta: p.expected_delivery_date.isoformat() if p.expected_delivery_date else "",
+        "Invoice Date": lambda p, i, c_name, c_eta: p.invoice_date.isoformat() if p.invoice_date else "",
+        "Lead Time (days)": lambda p, i, c_name, c_eta: p.container_lead_time_days if p.container_lead_time_days is not None else (p.vendor.container_lead_time_days if p.vendor else ""),
+        "Total Amount": lambda p, i, c_name, c_eta: p.total_amount or 0,
+        "Currency": lambda p, i, c_name, c_eta: p.currency or "USD",
+        "Item ID": lambda p, i, c_name, c_eta: i.sellercloud_item_id or "" if i else "",
+        "SKU": lambda p, i, c_name, c_eta: i.sku or "" if i else "",
+        "Product Name": lambda p, i, c_name, c_eta: i.product_name or "" if i else "",
+        "Qty Ordered": lambda p, i, c_name, c_eta: i.qty_ordered or 0 if i else "",
+        "Qty Received": lambda p, i, c_name, c_eta: i.qty_received or 0 if i else "",
+        "Qty in Container": lambda p, i, c_name, c_eta: i.qty_in_container or 0 if i else "",
+        "Unit Price": lambda p, i, c_name, c_eta: i.unit_price or 0 if i else "",
+        "Cases Ordered": lambda p, i, c_name, c_eta: i.qty_cases_ordered or 0 if i else "",
+        "Units per Case": lambda p, i, c_name, c_eta: i.qty_units_per_case or 0 if i else "",
+        "Case Price": lambda p, i, c_name, c_eta: i.case_price or 0 if i else "",
+        "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.isoformat() if i and i.expected_delivery_date else "",
+        "Container Name": lambda p, i, c_name, c_eta: c_name,
+        "Container ETA": lambda p, i, c_name, c_eta: c_eta
+    }
+
+    all_cols = list(column_map.keys())
+    selected_cols = request_data.columns if request_data.columns else all_cols
     
-    # Write header row
-    writer.writerow([
-        "PO ID", "PO Title", "Vendor", "Status Code", "Receiving Status",
-        "Created On", "Date Ordered", "Expected Delivery", "Invoice Date",
-        "Lead Time (days)", "Total Amount", "Currency",
-        "Item ID", "SKU", "Product Name", "Qty Ordered", "Qty Received",
-        "Qty in Container", "Unit Price", "Cases Ordered", "Units per Case",
-        "Case Price", "Item Expected Delivery", "Container Name", "Container ETA"
-    ])
+    # Filter out invalid columns
+    selected_cols = [c for c in selected_cols if c in column_map]
     
-    # Write data for each PO and its items
+    writer.writerow(selected_cols)
+    
     for po in pos:
-        lead_time = po.container_lead_time_days if po.container_lead_time_days is not None else (po.vendor.container_lead_time_days if po.vendor else "")
-        # If PO has no items, write PO header only
         if not po.items:
-            writer.writerow([
-                po.sellercloud_po_id,
-                po.purchase_title or "",
-                po.vendor.name if po.vendor else "",
-                po.purchase_order_status_code or "",
-                po.receiving_status_code or "",
-                po.created_on.isoformat() if po.created_on else "",
-                po.date_ordered.isoformat() if po.date_ordered else "",
-                po.expected_delivery_date.isoformat() if po.expected_delivery_date else "",
-                po.invoice_date.isoformat() if po.invoice_date else "",
-                lead_time,
-                po.total_amount or 0,
-                po.currency or "USD",
-                "", "", "", "", "", "", "", "", "", "", "", "", ""
-            ])
+            row = [column_map[col](po, None, "", "") for col in selected_cols]
+            writer.writerow(row)
         else:
-            # Write one row per item
             for item in po.items:
-                # Get container info
-                container_name = ""
-                container_eta = ""
-                if item.container_links:
-                    containers = [link.container for link in item.container_links if link.container]
-                    if containers:
-                        container_name = ", ".join([c.container_name or "" for c in containers])
-                        container_eta = ", ".join([
-                            c.estimated_arrival_date.isoformat() if c.estimated_arrival_date else ""
-                            for c in containers
-                        ])
-                
-                writer.writerow([
-                    po.sellercloud_po_id,
-                    po.purchase_title or "",
-                    po.vendor.name if po.vendor else "",
-                    po.purchase_order_status_code or "",
-                    po.receiving_status_code or "",
-                    po.created_on.isoformat() if po.created_on else "",
-                    po.date_ordered.isoformat() if po.date_ordered else "",
-                    po.expected_delivery_date.isoformat() if po.expected_delivery_date else "",
-                    po.invoice_date.isoformat() if po.invoice_date else "",
-                    lead_time,
-                    po.total_amount or 0,
-                    po.currency or "USD",
-                    item.sellercloud_item_id or "",
-                    item.sku or "",
-                    item.product_name or "",
-                    item.qty_ordered or 0,
-                    item.qty_received or 0,
-                    item.qty_in_container or 0,
-                    item.unit_price or 0,
-                    item.qty_cases_ordered or 0,
-                    item.qty_units_per_case or 0,
-                    item.case_price or 0,
-                    item.expected_delivery_date.isoformat() if item.expected_delivery_date else "",
-                    container_name,
-                    container_eta
-                ])
-    
-    # Prepare response
+                c_name, c_eta = get_container_info(item)
+                row = [column_map[col](po, item, c_name, c_eta) for col in selected_cols]
+                writer.writerow(row)
+
     output.seek(0)
-    filename = f"POs_{len(pos)}_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
     return StreamingResponse(
-        io.BytesIO(output.getvalue().encode('utf-8')),
+        iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename=purchase_orders.csv"}
     )
 
 
