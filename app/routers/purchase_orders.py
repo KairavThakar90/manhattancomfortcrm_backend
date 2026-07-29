@@ -1321,11 +1321,13 @@ def export_multiple_pos_csv(
     """
     Export multiple POs to a single CSV file.
 
-    Provide a list of SellerCloud PO IDs (or internal PO UUIDs) to export.
-    Omit "po_ids" to export all purchase orders. Optionally provide "columns"
-    to select/order a subset of columns (see PO_EXPORT_COLUMNS for valid names) -
-    if only PO-level columns are selected, one row is written per PO; otherwise
-    one row is written per line item.
+    Provide a list of SellerCloud PO IDs (or internal PO UUIDs) to export, or a
+    "filter_status" (invoice_delayed, delivery_delayed, lefts_items) to export a
+    predefined category. Omit both "po_ids" and "filter_status" to export all
+    purchase orders. Optionally provide "columns" to select/order a subset of
+    columns (see PO_EXPORT_COLUMNS for valid names) - if only PO-level columns
+    are selected, one row is written per PO; otherwise one row is written per
+    line item.
 
     Example: POST /api/v1/purchase-orders/export/csv
     Body: {"po_ids": [11880, 11881, 11882], "columns": ["PO ID", "Vendor", "Total Amount"]}
@@ -1350,11 +1352,47 @@ def export_multiple_pos_csv(
                 models.PurchaseOrder.id.in_(uuid_ids) if uuid_ids else False,
             )
         )
+        pos = query.all()
+    elif request_data.filter_status:
+        from datetime import timezone
+        cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
+        today = datetime.now(timezone.utc).date()
 
-    pos = query.all()
+        status = request_data.filter_status
+        if status == "invoice_delayed":
+            pos = query.filter(
+                and_(
+                    models.PurchaseOrder.invoice_date.is_(None),
+                    models.PurchaseOrder.created_on <= cutoff_10_days
+                )
+            ).order_by(models.PurchaseOrder.created_on.asc()).all()
+        elif status == "delivery_delayed":
+            candidates = query.filter(
+                and_(
+                    models.PurchaseOrder.invoice_date.isnot(None),
+                    models.PurchaseOrder.container_lead_time_days.isnot(None)
+                )
+            ).all()
+            pos = [
+                p for p in candidates
+                if p.invoice_date and p.container_lead_time_days
+                and (p.invoice_date.date() + timedelta(days=p.container_lead_time_days)) < today
+            ]
+        elif status == "lefts_items":
+            candidates = query.join(
+                models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id
+            ).distinct().all()
+            pos = [
+                p for p in candidates
+                if sum(item.qty_ordered - item.qty_received for item in p.items) > 0
+            ]
+        else:
+            raise HTTPException(status_code=400, detail="Invalid filter_status. Must be invoice_delayed, delivery_delayed, or lefts_items")
+    else:
+        pos = query.all()
 
     if not pos:
-        raise HTTPException(status_code=404, detail="No POs found with provided IDs")
+        raise HTTPException(status_code=404, detail="No POs found with provided criteria")
 
     def lead_time_of(po):
         return po.container_lead_time_days if po.container_lead_time_days is not None else (po.vendor.container_lead_time_days if po.vendor else "")
@@ -1422,11 +1460,11 @@ def export_multiple_pos_csv(
     # Prepare response
     output.seek(0)
     filename = f"POs_{len(pos)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
+
     return StreamingResponse(
-        io.BytesIO(output.getvalue().encode('utf-8')),
+        iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename=purchase_orders.csv"}
     )
 
 

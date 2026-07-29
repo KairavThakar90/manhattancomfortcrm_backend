@@ -97,6 +97,18 @@ class CustomerOut(BaseModel):
 
 
 # ---------- Purchase Order ----------
+class WarehouseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sellercloud_warehouse_id: Optional[int] = None
+    name: Optional[str] = None
+    is_default: Optional[bool] = None
+    warehouse_type: Optional[str] = None
+    is_sellable: Optional[bool] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class ContainerSummary(BaseModel):
     """Container summary for items — includes qty_in_container from the join table."""
     model_config = ConfigDict(from_attributes=True)
@@ -116,6 +128,8 @@ class ContainerOut(BaseModel):
     estimated_arrival_date: Optional[datetime] = None
     received_date: Optional[datetime] = None
     is_received: bool = False           # True when received_date is not None
+    warehouse_id: Optional[uuid.UUID] = None
+    warehouse: Optional[WarehouseOut] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     # Summary counts (populated by the list endpoint, not from ORM directly)
@@ -134,13 +148,16 @@ class ContainerOut(BaseModel):
 
 
 class ContainerListResponse(BaseModel):
-    """Paginated container list response."""
     total: int
     page: int
     page_size: int
     meta: dict = {}
-    results: List[ContainerOut] = []
+    results: list[ContainerOut] = []
 
+class ContainerExportRequest(BaseModel):
+    container_ids: Optional[list[str]] = Field(default=None, description="List of container UUIDs to export")
+    is_received: Optional[bool] = Field(default=None, description="Filter: true = received, false = pending")
+    columns: Optional[list[str]] = Field(default=None, description="List of columns to export")
 
 class ContainerDetailItemOut(BaseModel):
     """One line item inside a container detail response."""
@@ -191,6 +208,7 @@ class ContainerCreate(BaseModel):
     container_name: str = Field(min_length=1, max_length=255, description="Container name/number")
     estimated_arrival_date: Optional[datetime] = Field(default=None, description="Expected arrival date")
     received_date: Optional[datetime] = Field(default=None, description="Actual received date")
+    warehouse_id: Optional[Union[uuid.UUID, int]] = Field(default=None, description="Warehouse UUID or SellerCloud integer ID")
     items: List[ContainerItemCreate] = Field(min_length=1, description="List of items in this container")
 
 
@@ -306,6 +324,16 @@ class POCommentOut(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+class WarehouseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sellercloud_warehouse_id: Optional[int] = None
+    name: Optional[str] = None
+    is_default: Optional[bool] = None
+    warehouse_type: Optional[str] = None
+    is_sellable: Optional[bool] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class PurchaseOrderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -313,8 +341,8 @@ class PurchaseOrderOut(BaseModel):
     sellercloud_po_id: Optional[int] = None
     purchase_title: Optional[str] = None
     order_number: Optional[str] = None  # Extracted from purchase_title (number after #)
-    warehouse_id: Optional[int] = None
-    warehouse_name: Optional[str] = None
+    warehouse_id: Optional[uuid.UUID] = None
+    warehouse: Optional[WarehouseOut] = None
     purchase_order_status_code: Optional[int] = None
     receiving_status_code: Optional[int] = None
     status_label: Optional[str] = None
@@ -333,8 +361,14 @@ class PurchaseOrderOut(BaseModel):
     
     @computed_field
     def sellercloud_link(self) -> Optional[str]:
+        if hasattr(self, 'order_number') and self.order_number:
+            return f"https://cd.cwa.sellercloud.com/Orders/Orders_Details.aspx?ID={self.order_number}"
+        return None
+
+    @computed_field
+    def delta_sellercloud_link(self) -> Optional[str]:
         if self.sellercloud_po_id:
-            return f"https://cd.cwa.sellercloud.com/Orders/Orders_Details.aspx?ID={self.sellercloud_po_id}"
+            return f"https://cd.delta.sellercloud.com/purchasing/po-details.aspx?id={self.sellercloud_po_id}"
         return None
     # Computed totals for all items
     total_item_count: Optional[int] = None  # Count of items in this PO
@@ -442,4 +476,5 @@ class SyncResponse(BaseModel):
 
 class POExportRequest(BaseModel):
     po_ids: Optional[List[Union[int, uuid.UUID]]] = Field(default=None, description="SellerCloud PO IDs (int) or internal PO UUIDs. Omit to export all purchase orders.")
+    filter_status: Optional[str] = Field(default=None, description="invoice_delayed, delivery_delayed, or lefts_items")
     columns: Optional[List[str]] = Field(default=None, description="Subset/order of column names to include. Omit to include all columns.")

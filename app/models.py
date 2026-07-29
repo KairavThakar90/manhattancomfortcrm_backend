@@ -97,6 +97,22 @@ class Customer(Base):
     company = relationship("Company", back_populates="customers")
 
 
+class Warehouse(Base):
+    __tablename__ = "warehouses"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sellercloud_warehouse_id = Column(Integer, unique=True, index=True)
+    name = Column(String(255))
+    is_default = Column(Boolean, default=False)
+    warehouse_type = Column(String(50))
+    is_sellable = Column(Boolean, default=True)
+    
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    purchase_orders = relationship("PurchaseOrder", back_populates="warehouse")
+    containers = relationship("ShippingContainer", back_populates="warehouse")
+
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
 
@@ -117,9 +133,8 @@ class PurchaseOrder(Base):
     currency = Column(String(10), default="USD")
     notes = Column(Text)
     
-    # Warehouse Info
-    warehouse_id = Column(Integer)
-    warehouse_name = Column(String(255))
+    # Warehouse Info (ForeignKey to Warehouse table)
+    warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))
     
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -127,6 +142,7 @@ class PurchaseOrder(Base):
 
     company = relationship("Company", back_populates="purchase_orders")
     vendor = relationship("Vendor", back_populates="purchase_orders")
+    warehouse = relationship("Warehouse", back_populates="purchase_orders")
     items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
     comments = relationship("PurchaseOrderComment", back_populates="purchase_order", cascade="all, delete-orphan")
 
@@ -178,12 +194,13 @@ class ShippingContainer(Base):
     container_name = Column(String(255))
     estimated_arrival_date = Column(DateTime(timezone=True))  # ETA from SellerCloud
     received_date = Column(DateTime(timezone=True))  # Actual received date from SellerCloud
+    warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     item_links = relationship("PurchaseOrderItemContainer", back_populates="container", cascade="all, delete-orphan")
-
+    warehouse = relationship("Warehouse", back_populates="containers")
 
 class PurchaseOrderItemContainer(Base):
     __tablename__ = "purchase_order_item_containers"

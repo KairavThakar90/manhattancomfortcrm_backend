@@ -375,6 +375,19 @@ def create_container(
     }
     if container_data.received_date:
         sc_container_payload["ShippedOn"] = container_data.received_date.isoformat()
+        
+    if container_data.warehouse_id:
+        import uuid
+        if isinstance(container_data.warehouse_id, uuid.UUID) or (isinstance(container_data.warehouse_id, str) and '-' in str(container_data.warehouse_id)):
+            warehouse = db.query(models.Warehouse).filter(models.Warehouse.id == str(container_data.warehouse_id)).first()
+        else:
+            warehouse = db.query(models.Warehouse).filter(models.Warehouse.sellercloud_warehouse_id == int(container_data.warehouse_id)).first()
+            
+        if warehouse:
+            if warehouse.sellercloud_warehouse_id:
+                sc_container_payload["ReceiveWarehouseID"] = warehouse.sellercloud_warehouse_id
+            # Reassign container_data.warehouse_id to the UUID for local saving
+            container_data.warehouse_id = warehouse.id
 
     sc_response: dict = {}
     sellercloud_container_id = None
@@ -439,6 +452,7 @@ def create_container(
         estimated_arrival_date=container_data.estimated_arrival_date,
         received_date=container_data.received_date,
         sellercloud_container_id=sellercloud_container_id,
+        warehouse_id=container_data.warehouse_id,
         raw_json=sc_response if isinstance(sc_response, dict) else {"error": sc_sync_error},
     )
     db.add(new_container)
@@ -767,6 +781,8 @@ def sync_container_from_sellercloud(
     try:
         sc_client = SellerCloudClient()
         sc_resp = sc_client.get(f"/api/ShippingContainers/{container.sellercloud_container_id}")
+        
+        from app.services.sync_service import _get_or_create_warehouse
 
         # SC response: { "Details": {ContainerName, EstimatedArrivalDate, ReceivedOnDate}, "Items": {...} }
         sc = sc_resp.get("Details") or sc_resp
@@ -783,6 +799,11 @@ def sync_container_from_sellercloud(
             container.received_date = datetime.fromisoformat(
                 received_raw.replace("Z", "+00:00")
             )
+
+        warehouse_sc_id = sc.get("ReceiveWarehouseID")
+        warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
+        if warehouse:
+            container.warehouse_id = warehouse.id
 
         container.updated_at = datetime.utcnow()
         db.commit()
@@ -1071,3 +1092,113 @@ def debug_sc_create(
         },
         "error": error,
     }
+
+import csv
+import io
+from fastapi.responses import StreamingResponse
+from app.schemas import ContainerExportRequest
+from sqlalchemy.orm import joinedload
+
+# ---------------------------------------------------------------------------
+# POST /containers/export/csv
+# Export containers to CSV
+# ---------------------------------------------------------------------------
+@router.post("/export/csv")
+def export_containers_csv(
+    request_data: ContainerExportRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Export containers to a CSV file.
+    Creates a row for every item inside the matched containers.
+    """
+    query = db.query(models.ShippingContainer)
+    
+    if request_data.container_ids:
+        query = query.filter(models.ShippingContainer.id.in_(request_data.container_ids))
+        
+    if request_data.is_received is not None:
+        if request_data.is_received:
+            query = query.filter(models.ShippingContainer.received_date.isnot(None))
+        else:
+            query = query.filter(models.ShippingContainer.received_date.is_(None))
+            
+    # Eager load relationships
+    query = query.options(
+        joinedload(models.ShippingContainer.warehouse),
+        joinedload(models.ShippingContainer.item_links)
+        .joinedload(models.PurchaseOrderItemContainer.item)
+        .joinedload(models.PurchaseOrderItem.purchase_order)
+    )
+    
+    containers = query.order_by(models.ShippingContainer.created_at.desc()).all()
+    
+    # Define available columns
+    DEFAULT_COLUMNS = [
+        "container_name",
+        "sellercloud_container_id",
+        "estimated_arrival_date",
+        "received_date",
+        "warehouse_name",
+        "sellercloud_po_id",
+        "po_order_number",
+        "sku",
+        "item_name",
+        "qty_ordered",
+        "qty_in_container"
+    ]
+    
+    columns = request_data.columns if request_data.columns else DEFAULT_COLUMNS
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(columns)
+    
+    for ctr in containers:
+        warehouse_name = ctr.warehouse.name if ctr.warehouse else ""
+        
+        if not ctr.item_links:
+            # Container with no items
+            row_dict = {
+                "container_name": ctr.container_name or "",
+                "sellercloud_container_id": ctr.sellercloud_container_id or "",
+                "estimated_arrival_date": ctr.estimated_arrival_date.strftime("%Y-%m-%d") if ctr.estimated_arrival_date else "",
+                "received_date": ctr.received_date.strftime("%Y-%m-%d") if ctr.received_date else "",
+                "warehouse_name": warehouse_name,
+                "sellercloud_po_id": "",
+                "po_order_number": "",
+                "sku": "",
+                "item_name": "",
+                "qty_ordered": "",
+                "qty_in_container": ""
+            }
+            writer.writerow([row_dict.get(col, "") for col in columns])
+        else:
+            for link in ctr.item_links:
+                item = link.item
+                po = item.purchase_order if item else None
+                
+                row_dict = {
+                    "container_name": ctr.container_name or "",
+                    "sellercloud_container_id": ctr.sellercloud_container_id or "",
+                    "estimated_arrival_date": ctr.estimated_arrival_date.strftime("%Y-%m-%d") if ctr.estimated_arrival_date else "",
+                    "received_date": ctr.received_date.strftime("%Y-%m-%d") if ctr.received_date else "",
+                    "warehouse_name": warehouse_name,
+                    "sellercloud_po_id": po.sellercloud_po_id if po else "",
+                    "po_order_number": po.order_number if po else "",
+                    "sku": item.sku if item else "",
+                    "item_name": item.item_name if item else "",
+                    "qty_ordered": item.qty_ordered if item else "",
+                    "qty_in_container": link.qty_in_container or 0
+                }
+                writer.writerow([row_dict.get(col, "") for col in columns])
+                
+    output.seek(0)
+    from datetime import datetime
+    filename = f"containers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
