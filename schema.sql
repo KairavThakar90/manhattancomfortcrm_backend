@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     total_amount                    NUMERIC(14,2),
     currency                        VARCHAR(10) DEFAULT 'USD',
     notes                            TEXT,
+    warehouse_id                     INTEGER,
+    warehouse_name                   VARCHAR(255),
     raw_json                        JSONB,
     created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -117,6 +119,19 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
 CREATE INDEX IF NOT EXISTS idx_po_vendor ON purchase_orders(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_po_company ON purchase_orders(company_id);
 CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
+
+-- ---------------------------------------------------------
+-- 5b. Purchase Order Comments
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS purchase_order_comments (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    purchase_order_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+    comment           TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_comments_po ON purchase_order_comments(purchase_order_id);
 
 -- ---------------------------------------------------------
 -- 6. Purchase Order Line Items

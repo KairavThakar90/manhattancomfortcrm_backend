@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Union
 
-from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field, AliasChoices
 
 
 # ---------- Auth ----------
@@ -290,7 +290,11 @@ class PurchaseOrderItemOut(BaseModel):
 
 
 class POCommentCreate(BaseModel):
-    comment: str
+    comment: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("comment", "text", "message", "content"),
+    )
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class POCommentOut(BaseModel):
@@ -437,4 +441,5 @@ class SyncResponse(BaseModel):
 
 
 class POExportRequest(BaseModel):
-    po_ids: list[int]
+    po_ids: Optional[List[Union[int, uuid.UUID]]] = Field(default=None, description="SellerCloud PO IDs (int) or internal PO UUIDs. Omit to export all purchase orders.")
+    columns: Optional[List[str]] = Field(default=None, description="Subset/order of column names to include. Omit to include all columns.")
