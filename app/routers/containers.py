@@ -1178,6 +1178,13 @@ def export_containers_csv(
                 item = link.item
                 po = item.purchase_order if item else None
                 
+                po_order_number = ""
+                if po and po.purchase_title:
+                    import re
+                    match = re.search(r'#(\d+)', po.purchase_title)
+                    if match:
+                        po_order_number = match.group(1)
+
                 row_dict = {
                     "container_name": ctr.container_name or "",
                     "sellercloud_container_id": ctr.sellercloud_container_id or "",
@@ -1185,9 +1192,9 @@ def export_containers_csv(
                     "received_date": ctr.received_date.strftime("%Y-%m-%d") if ctr.received_date else "",
                     "warehouse_name": warehouse_name,
                     "sellercloud_po_id": po.sellercloud_po_id if po else "",
-                    "po_order_number": po.order_number if po else "",
+                    "po_order_number": po_order_number,
                     "sku": item.sku if item else "",
-                    "item_name": item.item_name if item else "",
+                    "item_name": item.product_name if item else "",
                     "qty_ordered": item.qty_ordered if item else "",
                     "qty_in_container": link.qty_in_container or 0
                 }
