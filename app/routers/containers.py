@@ -27,6 +27,7 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 # GET /containers/  — paginated list with filters
 # ---------------------------------------------------------------------------
+@router.get("")
 @router.get("/")
 def list_containers(
     page: int = Query(1, ge=1, description="Page number"),
@@ -112,9 +113,7 @@ def list_containers(
         links = ctr.item_links  # loaded via relationship
         total_items = len(links)
         total_qty = sum(lnk.qty_in_container or 0 for lnk in links)
-        total_received = sum(
-            lnk.item.qty_received if lnk.item else 0 for lnk in links
-        )
+        total_received = total_qty if ctr.received_date else 0
         unique_po_ids = set(
             lnk.item.purchase_order_id for lnk in links if lnk.item
         )
@@ -709,7 +708,7 @@ def get_container_details(
         )
 
     total_qty = sum(i.qty_in_container for i in items_out)
-    total_received_qty = sum(i.qty_received for i in items_out)
+    total_received_qty = total_qty if container.received_date else 0
     unique_po_ids = set(
         str(link.item.purchase_order_id)
         for link in container.item_links

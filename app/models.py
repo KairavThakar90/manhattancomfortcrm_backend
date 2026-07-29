@@ -21,6 +21,8 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    po_comments = relationship("PurchaseOrderComment", back_populates="user")
 
 
 class Company(Base):
@@ -114,6 +116,11 @@ class PurchaseOrder(Base):
     total_amount = Column(Numeric(14, 2))
     currency = Column(String(10), default="USD")
     notes = Column(Text)
+    
+    # Warehouse Info
+    warehouse_id = Column(Integer)
+    warehouse_name = Column(String(255))
+    
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -121,6 +128,21 @@ class PurchaseOrder(Base):
     company = relationship("Company", back_populates="purchase_orders")
     vendor = relationship("Vendor", back_populates="purchase_orders")
     items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
+    comments = relationship("PurchaseOrderComment", back_populates="purchase_order", cascade="all, delete-orphan")
+
+
+class PurchaseOrderComment(Base):
+    __tablename__ = "purchase_order_comments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purchase_order_id = Column(UUID(as_uuid=True), ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    comment = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    purchase_order = relationship("PurchaseOrder", back_populates="comments")
+    user = relationship("User", back_populates="po_comments")
+
 
 
 class PurchaseOrderItem(Base):

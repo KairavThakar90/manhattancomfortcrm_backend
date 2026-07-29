@@ -155,7 +155,7 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
         )
     
     # Hash the password
-    hashed_password = auth_utils.get_password_hash(user_data.password)
+    hashed_password = auth_utils.hash_password(user_data.password)
     
     # Create new user
     new_user = models.User(
