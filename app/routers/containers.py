@@ -57,7 +57,7 @@ def list_containers(
     - `total_qty_received` — total units received from SC
     - `unique_pos` — number of distinct POs in the container
     """
-    query = db.query(models.ShippingContainer)
+    query = db.query(models.ShippingContainer).options(joinedload(models.ShippingContainer.warehouse))
 
     # Received / not-received filter
     if received is True:
@@ -126,6 +126,8 @@ def list_containers(
                 estimated_arrival_date=ctr.estimated_arrival_date,
                 received_date=ctr.received_date,
                 is_received=ctr.received_date is not None,
+                warehouse_id=ctr.warehouse_id,
+                warehouse=ctr.warehouse,
                 created_at=ctr.created_at,
                 updated_at=ctr.updated_at,
                 total_items=total_items,
@@ -823,6 +825,15 @@ def sync_container_from_sellercloud(
                 "received_date": (
                     container.received_date.isoformat() if container.received_date else None
                 ),
+                "warehouse_id": str(container.warehouse_id) if container.warehouse_id else None,
+                "warehouse": {
+                    "id": str(warehouse.id),
+                    "sellercloud_warehouse_id": warehouse.sellercloud_warehouse_id,
+                    "name": warehouse.name,
+                    "is_default": warehouse.is_default,
+                    "warehouse_type": warehouse.warehouse_type,
+                    "is_sellable": warehouse.is_sellable
+                } if warehouse else None
             },
         }
 
