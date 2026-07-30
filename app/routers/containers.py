@@ -4,7 +4,7 @@ Container API endpoints
 from typing import Optional, List
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -1252,3 +1252,131 @@ def export_containers_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /containers/import/preview
+# Read an uploaded CSV or Excel file and return found PO items
+# ---------------------------------------------------------------------------
+@router.post("/import/preview")
+async def preview_container_import(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Reads an uploaded CSV or Excel file containing container items.
+    Tries to map each row to a PurchaseOrderItem in the database.
+    
+    Expected columns (flexible naming):
+    - POID / PO ID
+    - ProductID / SKU / ProductID - SKU
+    - Quantity / Qty
+    
+    Returns a JSON array where each row shows the data from the file
+    plus the matched `po_item_id` and item details, or `null` if not found.
+    """
+    if not file.filename.endswith(('.csv', '.xlsx', '.xls')):
+        raise HTTPException(status_code=400, detail="Only CSV or Excel files are supported")
+        
+    try:
+        import pandas as pd
+        import io
+        
+        contents = await file.read()
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(contents))
+        else:
+            df = pd.read_excel(io.BytesIO(contents))
+            
+        # Clean up column names (strip whitespace)
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Identify columns
+        po_col = next((c for c in df.columns if 'po' in c.lower() and 'id' in c.lower()), None)
+        if not po_col:
+            # Fallback if there is just "PO" or something
+            po_col = next((c for c in df.columns if c.lower() in ['po', 'po number', 'purchase order']), None)
+            
+        sku_col = next((c for c in df.columns if 'sku' in c.lower() or 'productid' in c.lower() or 'product id' in c.lower()), None)
+        qty_col = next((c for c in df.columns if 'qty' in c.lower() or 'quantity' in c.lower()), None)
+        
+        if not po_col or not sku_col:
+            raise HTTPException(status_code=400, detail=f"Could not identify PO ID or SKU columns. Found columns: {', '.join(df.columns)}")
+            
+        results = []
+        
+        for index, row in df.iterrows():
+            po_val = str(row[po_col]).strip() if pd.notna(row[po_col]) else ""
+            sku_val = str(row[sku_col]).strip() if pd.notna(row[sku_col]) else ""
+            qty_val = 0
+            if qty_col and pd.notna(row[qty_col]):
+                try:
+                    qty_val = int(float(row[qty_col]))
+                except ValueError:
+                    qty_val = 0
+                    
+            if not po_val or not sku_val:
+                continue
+                
+            # Clean up PO value in case it has # or .0
+            import re
+            po_val_clean = re.sub(r'[^0-9]', '', po_val)
+            if not po_val_clean:
+                po_val_clean = po_val
+                
+            # Lookup PO item in DB
+            try:
+                sellercloud_po_id = int(po_val_clean)
+            except ValueError:
+                sellercloud_po_id = -1
+                
+            po_item = (
+                db.query(models.PurchaseOrderItem)
+                .join(models.PurchaseOrder)
+                .filter(
+                    models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id,
+                    models.PurchaseOrderItem.sku.ilike(f"%{sku_val}%")
+                )
+                .first()
+            )
+            
+            row_result = {
+                "row_index": index + 1,
+                "file_po_id": po_val,
+                "file_sku": sku_val,
+                "file_qty": qty_val,
+                "found_item": None
+            }
+            
+            if po_item:
+                qty_already = sum(link.qty_in_container or 0 for link in po_item.container_links) if po_item.container_links else 0
+                qty_available = max(0, po_item.qty_ordered - qty_already)
+                
+                row_result["found_item"] = {
+                    "po_item_id": str(po_item.id),
+                    "purchase_order_id": str(po_item.purchase_order_id),
+                    "sellercloud_item_id": po_item.sellercloud_item_id,
+                    "product_name": po_item.product_name,
+                    "qty_ordered": po_item.qty_ordered,
+                    "qty_received": po_item.qty_received,
+                    "qty_already_in_containers": qty_already,
+                    "qty_available_for_container": qty_available
+                }
+                
+            results.append(row_result)
+            
+        return {
+            "success": True,
+            "message": f"Processed {len(results)} rows",
+            "columns_identified": {
+                "po_column": po_col,
+                "sku_column": sku_col,
+                "quantity_column": qty_col
+            },
+            "data": results
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")

@@ -184,7 +184,8 @@ class OptimizedSyncService:
         self, 
         days: int = 30, 
         skip_with_containers: bool = True,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        max_duration_seconds: int = 50
     ):
         """
         **OPTIMIZED BULK CONTAINER SYNC** - Dramatically reduces bandwidth.
@@ -213,8 +214,13 @@ class OptimizedSyncService:
             "pos_skipped": 0,
             "containers_synced": 0,
             "links_synced": 0,
-            "bandwidth_saved": "~80-95%"
+            "links_synced": 0,
+            "bandwidth_saved": "~80-95%",
+            "stopped_early": False
         }
+        
+        import time
+        start_time = time.time()
         
         try:
             # Build query for recent POs with items
@@ -243,6 +249,12 @@ class OptimizedSyncService:
             
             # Process each PO
             for idx, po in enumerate(pos, 1):
+                if time.time() - start_time > max_duration_seconds:
+                    msg = f"Reached execution time limit ({max_duration_seconds}s). Stopped early to prevent timeout. Please run sync again to continue."
+                    errors.append(msg)
+                    stats["stopped_early"] = True
+                    break
+
                 if not po.sellercloud_po_id:
                     stats["pos_skipped"] += 1
                     continue
