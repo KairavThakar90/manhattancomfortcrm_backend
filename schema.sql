@@ -92,6 +92,20 @@ CREATE TABLE IF NOT EXISTS customers (
 -- ---------------------------------------------------------
 -- 5. Purchase Orders
 -- ---------------------------------------------------------
+-- ---------------------------------------------------------
+-- 4b. Warehouses (SellerCloud Warehouses)
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS warehouses (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sellercloud_warehouse_id   INTEGER UNIQUE,
+    name                       VARCHAR(255),
+    is_default                 BOOLEAN DEFAULT FALSE,
+    warehouse_type             VARCHAR(50),
+    is_sellable                BOOLEAN DEFAULT TRUE,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS purchase_orders (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sellercloud_po_id      INTEGER UNIQUE,
@@ -109,8 +123,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     total_amount                    NUMERIC(14,2),
     currency                        VARCHAR(10) DEFAULT 'USD',
     notes                            TEXT,
-    warehouse_id                     INTEGER,
-    warehouse_name                   VARCHAR(255),
+    warehouse_id                     UUID REFERENCES warehouses(id) ON DELETE SET NULL,
     raw_json                        JSONB,
     created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -118,7 +131,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
 
 CREATE INDEX IF NOT EXISTS idx_po_vendor ON purchase_orders(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_po_company ON purchase_orders(company_id);
-CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
+CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(purchase_order_status_code);
 
 -- ---------------------------------------------------------
 -- 5b. Purchase Order Comments
@@ -180,6 +193,8 @@ CREATE TABLE IF NOT EXISTS shipping_containers (
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS warehouse_id UUID REFERENCES warehouses(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS purchase_order_item_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
