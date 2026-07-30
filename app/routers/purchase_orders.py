@@ -1310,6 +1310,7 @@ def export_single_po_csv(
     writer.writerow(["Lead Time (days)", lead_time])
     writer.writerow(["Total Amount", f"{po.total_amount or 0} {po.currency or 'USD'}"])
     writer.writerow(["Notes", po.notes or ""])
+    writer.writerow(["Comments", " | ".join([c.comment for c in po.comments]) if getattr(po, "comments", None) else ""])
     writer.writerow([])  # Empty row
     
     # Write items header
@@ -1460,7 +1461,8 @@ def export_multiple_pos_csv(
         "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.isoformat() if i and i.expected_delivery_date else "",
         "Container Name": lambda p, i, c_name, c_eta: c_name,
         "Container ETA": lambda p, i, c_name, c_eta: c_eta,
-        "Notes": lambda p, i, c_name, c_eta: p.notes or ""
+        "Notes": lambda p, i, c_name, c_eta: p.notes or "",
+        "Comments": lambda p, i, c_name, c_eta: " | ".join([c.comment for c in p.comments]) if getattr(p, "comments", None) else ""
     }
 
     all_cols = list(column_map.keys())
