@@ -496,87 +496,146 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
             resp = sellercloud_client.get_containers_for_po_product(po.sellercloud_po_id, it.sku)
             candidates = resp.get("Items") or []
 
+            valid_sc_ids = set()
+            for c in candidates:
+                if c.get("ID"):
+                    valid_sc_ids.add(c.get("ID"))
+
+            # CLEANUP: Remove local links for this PO item if they no longer exist in SellerCloud
+            try:
+                local_links = db.query(models.PurchaseOrderItemContainer).filter(
+                    models.PurchaseOrderItemContainer.purchase_order_item_id == it.id
+                ).all()
+                for link in local_links:
+                    if link.container and link.container.sellercloud_container_id is not None:
+                        if link.container.sellercloud_container_id not in valid_sc_ids:
+                            db.delete(link)
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                print(f"Error cleaning up orphan links for item {it.id}: {e}")
+
             for c in candidates:
                 container_sc_id = c.get("ID")
                 if not container_sc_id or container_sc_id in seen_container_ids:
                     continue
                 seen_container_ids.add(container_sc_id)
 
-                detail = sellercloud_client.get_container(container_sc_id)
-                details_section = detail.get("Details") or {}
+                try:
+                    detail = sellercloud_client.get_container(container_sc_id)
+                    details_section = detail.get("Details") or {}
 
-                # Look up by SC container ID first
-                container = (
-                    db.query(models.ShippingContainer)
-                    .filter(models.ShippingContainer.sellercloud_container_id == container_sc_id)
-                    .first()
-                )
-                # Fallback: if we created this container locally but the SC sync
-                # failed, the local row has sellercloud_container_id=NULL but the
-                # same name.  Match by name to avoid creating a duplicate row.
-                if not container:
-                    sc_name = details_section.get("ContainerName")
-                    if sc_name:
-                        container = (
-                            db.query(models.ShippingContainer)
+                    # Look up by SC container ID first
+                    container = (
+                        db.query(models.ShippingContainer)
+                        .filter(models.ShippingContainer.sellercloud_container_id == container_sc_id)
+                        .first()
+                    )
+                    # Fallback: if we created this container locally but the SC sync
+                    # failed, the local row has sellercloud_container_id=NULL but the
+                    # same name.  Match by name to avoid creating a duplicate row.
+                    if not container:
+                        sc_name = details_section.get("ContainerName")
+                        if sc_name:
+                            container = (
+                                db.query(models.ShippingContainer)
+                                .filter(
+                                    models.ShippingContainer.container_name == sc_name,
+                                    models.ShippingContainer.sellercloud_container_id.is_(None),
+                                )
+                                .first()
+                            )
+
+                    warehouse_sc_id = details_section.get("ReceiveWarehouseID")
+                    warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
+
+                    estimated_arrival_date = None
+                    eta_raw = details_section.get("EstimatedArrivalDate")
+                    if eta_raw:
+                        try:
+                            estimated_arrival_date = datetime.fromisoformat(eta_raw.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
+                    
+                    received_date = None
+                    recv_raw = details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate")
+                    if recv_raw:
+                        try:
+                            received_date = datetime.fromisoformat(recv_raw.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
+
+                    container_fields = dict(
+                        sellercloud_container_id=container_sc_id,
+                        container_name=details_section.get("ContainerName"),
+                        estimated_arrival_date=estimated_arrival_date,
+                        received_date=received_date,
+                        warehouse_id=warehouse.id if warehouse else None,
+                        raw_json=detail,
+                    )
+                    if container:
+                        for k, v in container_fields.items():
+                            setattr(container, k, v)
+                    else:
+                        container = models.ShippingContainer(**container_fields)
+                        db.add(container)
+                        db.flush()
+                    containers_synced += 1
+
+                    results = ((detail.get("Items") or {}).get("Results")) or []
+                    for entry in results:
+                        match = item_by_sc_id.get(entry.get("POItemID"))
+                        if not match:
+                            continue  # this container item belongs to a PO/item we haven't synced locally - skip
+
+                        existing_link = (
+                            db.query(models.PurchaseOrderItemContainer)
                             .filter(
-                                models.ShippingContainer.container_name == sc_name,
-                                models.ShippingContainer.sellercloud_container_id.is_(None),
+                                models.PurchaseOrderItemContainer.purchase_order_item_id == match.id,
+                                models.PurchaseOrderItemContainer.shipping_container_id == container.id,
                             )
                             .first()
                         )
-
-                warehouse_sc_id = details_section.get("ReceiveWarehouseID")
-                warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
-
-                container_fields = dict(
-                    sellercloud_container_id=container_sc_id,
-                    container_name=details_section.get("ContainerName"),
-                    estimated_arrival_date=details_section.get("EstimatedArrivalDate"),
-                    received_date=details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate"),
-                    warehouse_id=warehouse.id if warehouse else None,
-                    raw_json=detail,
-                )
-                if container:
-                    for k, v in container_fields.items():
-                        setattr(container, k, v)
-                else:
-                    container = models.ShippingContainer(**container_fields)
-                    db.add(container)
-                    db.flush()
-                containers_synced += 1
-
-                results = ((detail.get("Items") or {}).get("Results")) or []
-                for entry in results:
-                    match = item_by_sc_id.get(entry.get("POItemID"))
-                    if not match:
-                        continue  # this container item belongs to a PO/item we haven't synced locally - skip
-
-                    existing_link = (
-                        db.query(models.PurchaseOrderItemContainer)
-                        .filter(
-                            models.PurchaseOrderItemContainer.purchase_order_item_id == match.id,
-                            models.PurchaseOrderItemContainer.shipping_container_id == container.id,
+                        link_fields = dict(
+                            purchase_order_item_id=match.id,
+                            shipping_container_id=container.id,
+                            qty_in_container=entry.get("Qty", 0),
+                            raw_json=entry,
                         )
-                        .first()
-                    )
-                    link_fields = dict(
-                        purchase_order_item_id=match.id,
-                        shipping_container_id=container.id,
-                        qty_in_container=entry.get("Qty", 0),
-                        raw_json=entry,
-                    )
-                    if existing_link:
-                        for k, v in link_fields.items():
-                            setattr(existing_link, k, v)
-                    else:
-                        db.add(models.PurchaseOrderItemContainer(**link_fields))
-                    links_synced += 1
+                        if existing_link:
+                            for k, v in link_fields.items():
+                                setattr(existing_link, k, v)
+                        else:
+                            db.add(models.PurchaseOrderItemContainer(**link_fields))
+                        links_synced += 1
 
-            db.commit()
+                    # Commit each container immediately so errors in subsequent containers don't rollback the good ones
+                    db.commit()
+                except Exception as inner_e:
+                    db.rollback()
+                    print(f"Error syncing individual container {container_sc_id}: {inner_e}")
+                    continue
+
 
         print(f"[sync_containers] done. {containers_synced} containers, {links_synced} item links.")
         _log_sync(db, "shipping_containers", "success", containers_synced)
+        
+        # CLEANUP: Delete containers that have no remaining item links (i.e., completely deleted in SC)
+        try:
+            orphan_containers = db.query(models.ShippingContainer).outerjoin(
+                models.PurchaseOrderItemContainer, 
+                models.ShippingContainer.id == models.PurchaseOrderItemContainer.shipping_container_id
+            ).filter(
+                models.PurchaseOrderItemContainer.id == None,
+                models.ShippingContainer.sellercloud_container_id.isnot(None)
+            ).all()
+            for oc in orphan_containers:
+                db.delete(oc)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Error cleaning up orphan containers: {e}")
+            
     except Exception as e:
         db.rollback()
         print(f"[sync_containers] FAILED after {containers_synced} containers: {e}")

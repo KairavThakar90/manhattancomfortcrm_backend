@@ -1,10 +1,47 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
 from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": str(exc.detail),
+            "error": str(exc.detail)
+        }
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = [f"{e['loc'][-1]}: {e['msg']}" for e in exc.errors()]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "message": "Validation error",
+            "error": "Invalid request parameters",
+            "errors": errors
+        }
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": "Internal server error",
+            "error": str(exc)
+        }
+    )
 
 # CORS configuration for production and development
 # Allows requests from Vercel deployments and localhost

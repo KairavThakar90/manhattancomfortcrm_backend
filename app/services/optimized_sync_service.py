@@ -98,6 +98,8 @@ class OptimizedSyncService:
                 
                 page += 1
             
+            errors = []
+            
             # Step 2: Fetch and sync full details for filtered POs
             for po_id in po_ids_to_sync:
                 if not po_id:
@@ -154,13 +156,17 @@ class OptimizedSyncService:
                     self.db.commit()
                     
                 except Exception as e:
-                    print(f"[OptimizedSync] Error syncing PO {po_id}: {e}")
+                    self.db.rollback()
+                    error_msg = f"Error syncing PO {po_id}: {e}"
+                    print(f"[OptimizedSync] {error_msg}")
                     stats["pos_skipped"] += 1
+                    errors.append(error_msg)
                     continue
             
             return {
-                "success": True,
+                "success": len(errors) == 0 or (stats["pos_created"] + stats["pos_updated"]) > 0,
                 "stats": stats,
+                "errors": errors,
                 "cutoff_date": cutoff_date.isoformat(),
                 "days_synced": days,
                 "message": f"Synced {stats['pos_created']} new and {stats['pos_updated']} updated POs from last {days} days"
@@ -231,6 +237,8 @@ class OptimizedSyncService:
             pos = query.all()
             stats["pos_checked"] = len(pos)
             
+            errors = []
+            
             print(f"[OptimizedSync] Found {len(pos)} POs from last {days} days")
             
             # Process each PO
@@ -266,7 +274,10 @@ class OptimizedSyncService:
                               f"{stats['containers_synced']} containers")
                 
                 except Exception as e:
-                    print(f"[OptimizedSync] Error on PO {po.sellercloud_po_id}: {e}")
+                    self.db.rollback()
+                    error_msg = f"Error on PO {po.sellercloud_po_id}: {e}"
+                    print(f"[OptimizedSync] {error_msg}")
+                    errors.append(error_msg)
                     # Continue with next PO
                     continue
             
@@ -274,8 +285,9 @@ class OptimizedSyncService:
                   f"{stats['containers_synced']} containers, {stats['links_synced']} links")
             
             return {
-                "success": True,
+                "success": len(errors) == 0 or stats["pos_processed"] > 0,
                 "stats": stats,
+                "errors": errors,
                 "cutoff_date": cutoff.isoformat(),
                 "days_synced": days,
                 "message": f"Synced containers for {stats['pos_processed']} POs from last {days} days"
@@ -323,6 +335,8 @@ class OptimizedSyncService:
             
             print(f"[SelectiveSync] Syncing containers for {len(po_ids)} POs")
             
+            errors = []
+            
             # Sync containers for each PO using the existing efficient logic
             for po_id in po_ids:
                 try:
@@ -331,12 +345,16 @@ class OptimizedSyncService:
                     stats["containers_synced"] += result.get("containers_synced", 0)
                     stats["links_synced"] += result.get("links_synced", 0)
                 except Exception as e:
-                    print(f"[SelectiveSync] Error on PO {po_id}: {e}")
+                    self.db.rollback()
+                    error_msg = f"Error on PO {po_id}: {e}"
+                    print(f"[SelectiveSync] {error_msg}")
+                    errors.append(error_msg)
                     continue
             
             return {
-                "success": True,
+                "success": len(errors) == 0 or stats["pos_processed"] > 0,
                 "stats": stats,
+                "errors": errors,
                 "message": f"Synced containers for {stats['pos_processed']} POs"
             }
             

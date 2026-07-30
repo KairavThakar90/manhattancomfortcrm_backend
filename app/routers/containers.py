@@ -757,6 +757,8 @@ def get_container_details(
 # POST /containers/{container_id}/sync
 # Re-pull container info from SellerCloud
 # ---------------------------------------------------------------------------
+import httpx
+
 @router.post("/{container_id}/sync")
 def sync_container_from_sellercloud(
     container_id: str,
@@ -837,11 +839,30 @@ def sync_container_from_sellercloud(
             },
         }
 
+    except httpx.HTTPStatusError as exc:
+        db.rollback()
+        if exc.response.status_code == 404:
+            # The container was deleted in SellerCloud, so delete it locally
+            db.delete(container)
+            db.commit()
+            return {
+                "success": True,
+                "message": "Container was deleted in SellerCloud and has been removed locally.",
+                "deleted": True
+            }
+        return {
+            "success": False,
+            "message": "Error syncing from SellerCloud",
+            "error": str(exc)
+        }
     except Exception as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Error syncing from SellerCloud: {exc}"
-        )
+        # Return structured error response instead of 500 so frontend can handle it
+        return {
+            "success": False,
+            "message": "Error syncing from SellerCloud",
+            "error": str(exc)
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1165,11 +1186,22 @@ def export_containers_csv(
     writer = csv.writer(output)
     writer.writerow(columns)
     
+    item_specific_cols = {
+        "sellercloud_po_id",
+        "po_order_number",
+        "sku",
+        "item_name",
+        "qty_ordered",
+        "qty_in_container"
+    }
+    
+    requires_items = any(col in item_specific_cols for col in columns)
+    
     for ctr in containers:
         warehouse_name = ctr.warehouse.name if ctr.warehouse else ""
         
-        if not ctr.item_links:
-            # Container with no items
+        if not ctr.item_links or not requires_items:
+            # Container with no items or item-level columns not requested
             row_dict = {
                 "container_name": ctr.container_name or "",
                 "sellercloud_container_id": ctr.sellercloud_container_id or "",

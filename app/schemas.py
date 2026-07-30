@@ -464,10 +464,16 @@ class PaginatedResponse(BaseModel):
 
 
 class SyncResponse(BaseModel):
-    entity_type: str
-    status: str
-    records_synced: int
+    success: bool
     message: Optional[str] = None
+    error: Optional[str] = None
+    errors: Optional[list[str]] = None
+    data: Optional[dict] = None
+    
+    # Legacy fields
+    entity_type: Optional[str] = None
+    status: Optional[str] = None
+    records_synced: Optional[int] = 0
 
 
 class POExportRequest(BaseModel):

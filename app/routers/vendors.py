@@ -88,5 +88,20 @@ def trigger_sync(db: Session = Depends(get_db)):
     This will update existing vendor records (created as stubs during PO sync)
     with full vendor details including name, email, phone, address, etc.
     """
-    count = sync_vendors(db)
-    return SyncResponse(entity_type="vendors", status="success", records_synced=count)
+    try:
+        count = sync_vendors(db)
+        return SyncResponse(
+            success=True, 
+            message="Vendors synced successfully", 
+            records_synced=count, 
+            entity_type="vendors", 
+            status="success"
+        )
+    except Exception as e:
+        return SyncResponse(
+            success=False, 
+            message="Error syncing vendors", 
+            error=str(e), 
+            entity_type="vendors", 
+            status="error"
+        )

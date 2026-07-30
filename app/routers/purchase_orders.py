@@ -1037,8 +1037,23 @@ def trigger_sync(
     db: Session = Depends(get_db),
 ):
     """Pulls latest Purchase Orders (+ line items) from SellerCloud into Neon."""
-    count = sync_purchase_orders(db, view_id=view_id)
-    return SyncResponse(entity_type="purchase_orders", status="success", records_synced=count)
+    try:
+        count = sync_purchase_orders(db, view_id=view_id)
+        return SyncResponse(
+            success=True, 
+            message="Sync completed successfully", 
+            records_synced=count, 
+            entity_type="purchase_orders", 
+            status="success"
+        )
+    except Exception as e:
+        return SyncResponse(
+            success=False, 
+            message="Sync failed", 
+            error=str(e), 
+            entity_type="purchase_orders", 
+            status="error"
+        )
 
 
 @router.post("/{sellercloud_po_id}/sync")
@@ -1125,11 +1140,20 @@ def trigger_single_po_sync(
             "items_count": len(items)
         }
         
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        # Return structured error response instead of 404
+        return {
+            "success": False,
+            "message": "PO not found",
+            "error": str(e.detail)
+        }
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error syncing PO: {str(e)}")
+        return {
+            "success": False,
+            "message": "Error syncing PO",
+            "error": str(e)
+        }
 
 
 @router.post("/sync-containers")
@@ -1177,19 +1201,23 @@ def trigger_all_containers_sync(
         return {
             "success": True,
             "message": result.get("message"),
-            "pos_checked": stats.get("pos_checked", 0),
-            "pos_processed": stats.get("pos_processed", 0),
-            "pos_skipped": stats.get("pos_skipped", 0),
-            "containers_synced": stats.get("containers_synced", 0),
-            "links_synced": stats.get("links_synced", 0),
-            "days_synced": result.get("days_synced"),
-            "bandwidth_saved": stats.get("bandwidth_saved"),
+            "data": {
+                "pos_checked": stats.get("pos_checked", 0),
+                "pos_processed": stats.get("pos_processed", 0),
+                "pos_skipped": stats.get("pos_skipped", 0),
+                "containers_synced": stats.get("containers_synced", 0),
+                "links_synced": stats.get("links_synced", 0),
+                "days_synced": result.get("days_synced"),
+                "bandwidth_saved": stats.get("bandwidth_saved"),
+            }
         }
     else:
         return {
             "success": False,
+            "message": "Sync failed or partially failed",
             "error": result.get("error"),
-            "stats": result.get("stats", {})
+            "errors": result.get("errors", []),
+            "data": result.get("stats", {})
         }
 
 
@@ -1202,12 +1230,24 @@ def trigger_container_sync(sellercloud_po_id: int, db: Session = Depends(get_db)
     triggered here may also backfill links for OTHER already-synced POs that
     share the same consolidated container.
     """
-    result = sync_containers(db, po_id=sellercloud_po_id)
-    return {
-        "sellercloud_po_id": sellercloud_po_id,
-        "containers_synced": result["containers_synced"],
-        "links_synced": result["links_synced"],
-    }
+    try:
+        result = sync_containers(db, po_id=sellercloud_po_id)
+        return {
+            "success": True,
+            "message": f"Successfully synced containers for PO {sellercloud_po_id}",
+            "data": {
+                "sellercloud_po_id": sellercloud_po_id,
+                "containers_synced": result.get("containers_synced", 0),
+                "links_synced": result.get("links_synced", 0),
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        return {
+            "success": False,
+            "message": "Error syncing PO containers",
+            "error": str(e)
+        }
 
 
 
@@ -1327,9 +1367,6 @@ def export_multiple_pos_csv(
     Can be filtered by a list of PO IDs or by a specific filter status.
     Columns can be customized.
     """
-    if not request_data.po_ids and not request_data.filter_status:
-        raise HTTPException(status_code=400, detail="Must provide either po_ids or filter_status")
-
     from datetime import timezone, timedelta
     from sqlalchemy import and_
     cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
@@ -1349,7 +1386,9 @@ def export_multiple_pos_csv(
         pos = base_q.filter(models.PurchaseOrder.sellercloud_po_id.in_(request_data.po_ids)).all()
     else:
         status = request_data.filter_status
-        if status == 'invoice_delayed':
+        if not status or status.lower() == 'all':
+            pos = base_q.order_by(models.PurchaseOrder.created_on.desc()).all()
+        elif status == 'invoice_delayed':
             pos = base_q.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.is_(None),
@@ -1416,7 +1455,8 @@ def export_multiple_pos_csv(
         "Case Price": lambda p, i, c_name, c_eta: i.case_price or 0 if i else "",
         "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.isoformat() if i and i.expected_delivery_date else "",
         "Container Name": lambda p, i, c_name, c_eta: c_name,
-        "Container ETA": lambda p, i, c_name, c_eta: c_eta
+        "Container ETA": lambda p, i, c_name, c_eta: c_eta,
+        "Notes": lambda p, i, c_name, c_eta: p.notes or ""
     }
 
     all_cols = list(column_map.keys())
@@ -1427,14 +1467,29 @@ def export_multiple_pos_csv(
     
     writer.writerow(selected_cols)
     
+    item_specific_cols = {
+        "Item ID", "SKU", "Product Name", "Qty Ordered", "Qty Received", 
+        "Qty in Container", "Unit Price", "Cases Ordered", "Units per Case", 
+        "Case Price", "Item Expected Delivery", "Container Name", "Container ETA"
+    }
+    
+    requires_items = any(col in item_specific_cols for col in selected_cols)
+    
     for po in pos:
-        if not po.items:
+        if not po.items or not requires_items:
+            # Only output one row per PO if no item-level data is requested (or if PO has no items)
             row = [column_map[col](po, None, "", "") for col in selected_cols]
             writer.writerow(row)
         else:
-            for item in po.items:
+            for idx, item in enumerate(po.items):
                 c_name, c_eta = get_container_info(item)
                 row = [column_map[col](po, item, c_name, c_eta) for col in selected_cols]
+                
+                # Blank out Notes for subsequent items to avoid duplication
+                if idx > 0 and "Notes" in selected_cols:
+                    notes_idx = selected_cols.index("Notes")
+                    row[notes_idx] = ""
+                    
                 writer.writerow(row)
 
     output.seek(0)
@@ -1479,7 +1534,20 @@ def sync_pos_optimized(
     sync_service = OptimizedSyncService(db)
     result = sync_service.sync_recent_pos(days=days, batch_size=batch_size, view_id=view_id)
     
-    return result
+    if result.get("success"):
+        return {
+            "success": True,
+            "message": result.get("message"),
+            "data": result.get("stats", {})
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Sync failed or partially failed",
+            "error": result.get("error"),
+            "errors": result.get("errors", []),
+            "data": result.get("stats", {})
+        }
 
 
 @router.post("/sync/containers-selective")
@@ -1510,15 +1578,19 @@ def sync_containers_optimized(
         return {
             "success": True,
             "message": result.get("message"),
-            "pos_processed": stats.get("pos_processed", 0),
-            "containers_synced": stats.get("containers_synced", 0),
-            "links_synced": stats.get("links_synced", 0),
+            "data": {
+                "pos_processed": stats.get("pos_processed", 0),
+                "containers_synced": stats.get("containers_synced", 0),
+                "links_synced": stats.get("links_synced", 0),
+            }
         }
     else:
         return {
             "success": False,
+            "message": "Sync failed or partially failed",
             "error": result.get("error"),
-            "stats": result.get("stats", {})
+            "errors": result.get("errors", []),
+            "data": result.get("stats", {})
         }
 
 
