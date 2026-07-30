@@ -1282,7 +1282,9 @@ def export_single_po_csv(
             joinedload(models.PurchaseOrder.items)
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments)
+                .joinedload(models.PurchaseOrderComment.user)
         )
         .filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id)
         .first()
@@ -1310,7 +1312,10 @@ def export_single_po_csv(
     writer.writerow(["Lead Time (days)", lead_time])
     writer.writerow(["Total Amount", f"{po.total_amount or 0} {po.currency or 'USD'}"])
     writer.writerow(["Notes", po.notes or ""])
-    writer.writerow(["Comments", " | ".join([c.comment for c in po.comments]) if getattr(po, "comments", None) else ""])
+    comments_str = " | ".join(
+        [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
+    ) if getattr(po, "comments", None) else ""
+    writer.writerow(["Comments", comments_str])
     writer.writerow([])  # Empty row
     
     # Write items header
@@ -1383,7 +1388,9 @@ def export_multiple_pos_csv(
             joinedload(models.PurchaseOrder.items)
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments)
+                .joinedload(models.PurchaseOrderComment.user)
         )
     )
 
@@ -1462,7 +1469,9 @@ def export_multiple_pos_csv(
         "Container Name": lambda p, i, c_name, c_eta: c_name,
         "Container ETA": lambda p, i, c_name, c_eta: c_eta,
         "Notes": lambda p, i, c_name, c_eta: p.notes or "",
-        "Comments": lambda p, i, c_name, c_eta: " | ".join([c.comment for c in p.comments]) if getattr(p, "comments", None) else ""
+        "Comments": lambda p, i, c_name, c_eta: " | ".join(
+            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in p.comments]
+        ) if getattr(p, "comments", None) else ""
     }
 
     all_cols = list(column_map.keys())
