@@ -1157,6 +1157,7 @@ def trigger_all_containers_sync(
     days: int = Query(30, description="Sync containers for POs from last N days (default: 30)"),
     skip_with_containers: bool = Query(True, description="Skip POs that already have containers"),
     limit: Optional[int] = Query(None, description="Limit number of POs to sync (for testing)"),
+    max_duration: int = Query(50, description="Max seconds to run before returning (prevents Vercel timeout)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -1189,7 +1190,8 @@ def trigger_all_containers_sync(
     result = sync_service.sync_containers_bulk_optimized(
         days=days,
         skip_with_containers=skip_with_containers,
-        limit=limit
+        limit=limit,
+        max_duration_seconds=max_duration
     )
     
     if result.get("success"):
@@ -1205,7 +1207,9 @@ def trigger_all_containers_sync(
                 "links_synced": stats.get("links_synced", 0),
                 "days_synced": result.get("days_synced"),
                 "bandwidth_saved": stats.get("bandwidth_saved"),
-            }
+                "stopped_early": stats.get("stopped_early", False)
+            },
+            "errors": result.get("errors", [])
         }
     else:
         return {
