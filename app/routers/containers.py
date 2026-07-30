@@ -57,7 +57,7 @@ def list_containers(
     - `total_qty_received` — total units received from SC
     - `unique_pos` — number of distinct POs in the container
     """
-    query = db.query(models.ShippingContainer)
+    query = db.query(models.ShippingContainer).options(joinedload(models.ShippingContainer.warehouse))
 
     # Received / not-received filter
     if received is True:
@@ -126,6 +126,8 @@ def list_containers(
                 estimated_arrival_date=ctr.estimated_arrival_date,
                 received_date=ctr.received_date,
                 is_received=ctr.received_date is not None,
+                warehouse_id=ctr.warehouse_id,
+                warehouse=ctr.warehouse,
                 created_at=ctr.created_at,
                 updated_at=ctr.updated_at,
                 total_items=total_items,
@@ -755,6 +757,8 @@ def get_container_details(
 # POST /containers/{container_id}/sync
 # Re-pull container info from SellerCloud
 # ---------------------------------------------------------------------------
+import httpx
+
 @router.post("/{container_id}/sync")
 def sync_container_from_sellercloud(
     container_id: str,
@@ -823,14 +827,42 @@ def sync_container_from_sellercloud(
                 "received_date": (
                     container.received_date.isoformat() if container.received_date else None
                 ),
+                "warehouse_id": str(container.warehouse_id) if container.warehouse_id else None,
+                "warehouse": {
+                    "id": str(warehouse.id),
+                    "sellercloud_warehouse_id": warehouse.sellercloud_warehouse_id,
+                    "name": warehouse.name,
+                    "is_default": warehouse.is_default,
+                    "warehouse_type": warehouse.warehouse_type,
+                    "is_sellable": warehouse.is_sellable
+                } if warehouse else None
             },
         }
 
+    except httpx.HTTPStatusError as exc:
+        db.rollback()
+        if exc.response.status_code == 404:
+            # The container was deleted in SellerCloud, so delete it locally
+            db.delete(container)
+            db.commit()
+            return {
+                "success": True,
+                "message": "Container was deleted in SellerCloud and has been removed locally.",
+                "deleted": True
+            }
+        return {
+            "success": False,
+            "message": "Error syncing from SellerCloud",
+            "error": str(exc)
+        }
     except Exception as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Error syncing from SellerCloud: {exc}"
-        )
+        # Return structured error response instead of 500 so frontend can handle it
+        return {
+            "success": False,
+            "message": "Error syncing from SellerCloud",
+            "error": str(exc)
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1154,11 +1186,22 @@ def export_containers_csv(
     writer = csv.writer(output)
     writer.writerow(columns)
     
+    item_specific_cols = {
+        "sellercloud_po_id",
+        "po_order_number",
+        "sku",
+        "item_name",
+        "qty_ordered",
+        "qty_in_container"
+    }
+    
+    requires_items = any(col in item_specific_cols for col in columns)
+    
     for ctr in containers:
         warehouse_name = ctr.warehouse.name if ctr.warehouse else ""
         
-        if not ctr.item_links:
-            # Container with no items
+        if not ctr.item_links or not requires_items:
+            # Container with no items or item-level columns not requested
             row_dict = {
                 "container_name": ctr.container_name or "",
                 "sellercloud_container_id": ctr.sellercloud_container_id or "",
@@ -1178,6 +1221,13 @@ def export_containers_csv(
                 item = link.item
                 po = item.purchase_order if item else None
                 
+                po_order_number = ""
+                if po and po.purchase_title:
+                    import re
+                    match = re.search(r'#(\d+)', po.purchase_title)
+                    if match:
+                        po_order_number = match.group(1)
+
                 row_dict = {
                     "container_name": ctr.container_name or "",
                     "sellercloud_container_id": ctr.sellercloud_container_id or "",
@@ -1185,9 +1235,9 @@ def export_containers_csv(
                     "received_date": ctr.received_date.strftime("%Y-%m-%d") if ctr.received_date else "",
                     "warehouse_name": warehouse_name,
                     "sellercloud_po_id": po.sellercloud_po_id if po else "",
-                    "po_order_number": po.order_number if po else "",
+                    "po_order_number": po_order_number,
                     "sku": item.sku if item else "",
-                    "item_name": item.item_name if item else "",
+                    "item_name": item.product_name if item else "",
                     "qty_ordered": item.qty_ordered if item else "",
                     "qty_in_container": link.qty_in_container or 0
                 }

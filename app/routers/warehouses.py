@@ -21,6 +21,20 @@ def list_warehouses(db: Session = Depends(get_db)):
 
 @router.post("/sync")
 def sync_warehouses(db: Session = Depends(get_db)):
-    """Fetch and sync warehouses from SellerCloud."""
-    count = sync_service.sync_warehouses(db)
-    return {"message": f"Successfully synced {count} warehouses."}
+    try:
+        count = sync_service.sync_warehouses(db)
+        return schemas.SyncResponse(
+            success=True, 
+            message=f"Successfully synced {count} warehouses.",
+            records_synced=count,
+            entity_type="warehouses",
+            status="success"
+        )
+    except Exception as e:
+        return schemas.SyncResponse(
+            success=False,
+            message="Error syncing warehouses",
+            error=str(e),
+            entity_type="warehouses",
+            status="error"
+        )

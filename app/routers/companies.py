@@ -36,5 +36,20 @@ def get_company(company_id: str, db: Session = Depends(get_db)):
 @router.post("/sync", response_model=SyncResponse)
 def trigger_sync(db: Session = Depends(get_db)):
     """Pulls latest Companies from SellerCloud into Neon."""
-    count = sync_companies(db)
-    return SyncResponse(entity_type="companies", status="success", records_synced=count)
+    try:
+        count = sync_companies(db)
+        return SyncResponse(
+            success=True, 
+            message="Companies synced successfully", 
+            records_synced=count, 
+            entity_type="companies", 
+            status="success"
+        )
+    except Exception as e:
+        return SyncResponse(
+            success=False, 
+            message="Error syncing companies", 
+            error=str(e), 
+            entity_type="companies", 
+            status="error"
+        )
