@@ -1178,7 +1178,7 @@ def trigger_single_po_sync(
     - status: success or error
     - message: Details about the sync
     """
-    from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items
+    from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items, _get_or_create_warehouse
     from app.services.sellercloud_client import sellercloud_client
     
     try:
@@ -1199,6 +1199,9 @@ def trigger_single_po_sync(
         company = _get_or_create_company(db, company_sc_id)
         vendor = _get_or_create_vendor(db, vendor_sc_id)
         
+        warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
+        warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
+        
         # Upsert the PO
         existing_po = (
             db.query(models.PurchaseOrder)
@@ -1212,6 +1215,7 @@ def trigger_single_po_sync(
                 setattr(existing_po, key, val)
             existing_po.company_id = company.id if company else None
             existing_po.vendor_id = vendor.id if vendor else None
+            existing_po.warehouse_id = warehouse.id if warehouse else None
             po_row = existing_po
             
             # Delete existing items to re-create them
@@ -1223,7 +1227,8 @@ def trigger_single_po_sync(
             po_row = models.PurchaseOrder(
                 **mapped,
                 company_id=company.id if company else None,
-                vendor_id=vendor.id if vendor else None
+                vendor_id=vendor.id if vendor else None,
+                warehouse_id=warehouse.id if warehouse else None
             )
             db.add(po_row)
         
