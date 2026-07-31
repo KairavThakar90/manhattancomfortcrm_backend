@@ -1350,21 +1350,36 @@ async def preview_container_import(
             except ValueError:
                 sellercloud_po_id = -1
                 
-            po_item = (
-                db.query(models.PurchaseOrderItem)
-                .join(models.PurchaseOrder)
-                .filter(
-                    models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id,
-                    models.PurchaseOrderItem.sku.ilike(f"%{sku_val}%")
+            # Check PO existence first
+            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id).first()
+            po_item = None
+            validation_message = "Valid"
+            status = "success"
+            
+            if not po:
+                validation_message = f"PO {sellercloud_po_id} not found in database. Try syncing it first."
+                status = "error"
+            else:
+                # PO exists, check SKU
+                po_item = (
+                    db.query(models.PurchaseOrderItem)
+                    .filter(
+                        models.PurchaseOrderItem.purchase_order_id == po.id,
+                        models.PurchaseOrderItem.sku.ilike(f"%{sku_val}%")
+                    )
+                    .first()
                 )
-                .first()
-            )
+                if not po_item:
+                    validation_message = f"SKU '{sku_val}' not found in PO {sellercloud_po_id}."
+                    status = "error"
             
             row_result = {
                 "row_index": index + 1,
                 "file_po_id": po_val,
                 "file_sku": sku_val,
                 "file_qty": qty_val,
+                "status": status,
+                "validation_message": validation_message,
                 "found_item": None
             }
             
@@ -1400,3 +1415,154 @@ async def preview_container_import(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+@router.get("/validate-item")
+def validate_container_item(
+    po_id: str = Query(..., description="The SellerCloud PO ID"),
+    sku: str = Query(..., description="The SKU of the item"),
+    db: Session = Depends(get_db)
+):
+    """
+    Validates a single PO/SKU pair for a manual row entry on the frontend.
+    Returns exactly the same validation structure as the CSV import preview.
+    """
+    import re
+    
+    # Clean up PO value in case it has # or .0
+    po_val_clean = re.sub(r'[^0-9]', '', str(po_id))
+    if not po_val_clean:
+        po_val_clean = str(po_id)
+        
+    try:
+        sellercloud_po_id = int(po_val_clean)
+    except ValueError:
+        sellercloud_po_id = -1
+        
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id).first()
+    po_item = None
+    validation_message = "Valid"
+    status = "success"
+    
+    if not po:
+        validation_message = f"PO {sellercloud_po_id} not found in database. Try syncing it first."
+        status = "error"
+    else:
+        # PO exists, check SKU
+        po_item = (
+            db.query(models.PurchaseOrderItem)
+            .filter(
+                models.PurchaseOrderItem.purchase_order_id == po.id,
+                models.PurchaseOrderItem.sku.ilike(f"%{sku}%")
+            )
+            .first()
+        )
+        if not po_item:
+            validation_message = f"SKU '{sku}' not found in PO {sellercloud_po_id}."
+            status = "error"
+            
+    result = {
+        "file_po_id": str(po_id),
+        "file_sku": str(sku),
+        "status": status,
+        "validation_message": validation_message,
+        "found_item": None
+    }
+    
+    if po_item:
+        qty_already = sum(link.qty_in_container or 0 for link in po_item.container_links) if po_item.container_links else 0
+        qty_available = max(0, po_item.qty_ordered - qty_already)
+        
+        result["found_item"] = {
+            "po_item_id": str(po_item.id),
+            "purchase_order_id": str(po_item.purchase_order_id),
+            "sellercloud_item_id": po_item.sellercloud_item_id,
+            "product_name": po_item.product_name,
+            "qty_ordered": po_item.qty_ordered,
+            "qty_received": po_item.qty_received,
+            "qty_already_in_containers": qty_already,
+            "qty_available_for_container": qty_available
+        }
+        
+    return result
+
+@router.post("/validate-items-bulk")
+def validate_container_items_bulk(
+    request: schemas.ValidateContainerBulkRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Validates multiple PO/SKU pairs for manual row entries on the frontend.
+    Returns exactly the same validation structure as the CSV import preview for each row.
+    """
+    import re
+    results = []
+    
+    for index, item in enumerate(request.items):
+        po_id = item.po_id
+        sku = item.sku
+        qty = item.qty
+        
+        # Clean up PO value in case it has # or .0
+        po_val_clean = re.sub(r'[^0-9]', '', str(po_id))
+        if not po_val_clean:
+            po_val_clean = str(po_id)
+            
+        try:
+            sellercloud_po_id = int(po_val_clean)
+        except ValueError:
+            sellercloud_po_id = -1
+            
+        po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id).first()
+        po_item = None
+        validation_message = "Valid"
+        status = "success"
+        
+        if not po:
+            validation_message = f"PO {sellercloud_po_id} not found in database. Try syncing it first."
+            status = "error"
+        else:
+            # PO exists, check SKU
+            po_item = (
+                db.query(models.PurchaseOrderItem)
+                .filter(
+                    models.PurchaseOrderItem.purchase_order_id == po.id,
+                    models.PurchaseOrderItem.sku.ilike(f"%{sku}%")
+                )
+                .first()
+            )
+            if not po_item:
+                validation_message = f"SKU '{sku}' not found in PO {sellercloud_po_id}."
+                status = "error"
+                
+        row_result = {
+            "row_index": index + 1,
+            "file_po_id": str(po_id),
+            "file_sku": str(sku),
+            "file_qty": qty,
+            "status": status,
+            "validation_message": validation_message,
+            "found_item": None
+        }
+        
+        if po_item:
+            qty_already = sum(link.qty_in_container or 0 for link in po_item.container_links) if po_item.container_links else 0
+            qty_available = max(0, po_item.qty_ordered - qty_already)
+            
+            row_result["found_item"] = {
+                "po_item_id": str(po_item.id),
+                "purchase_order_id": str(po_item.purchase_order_id),
+                "sellercloud_item_id": po_item.sellercloud_item_id,
+                "product_name": po_item.product_name,
+                "qty_ordered": po_item.qty_ordered,
+                "qty_received": po_item.qty_received,
+                "qty_already_in_containers": qty_already,
+                "qty_available_for_container": qty_available
+            }
+            
+        results.append(row_result)
+        
+    return {
+        "success": True,
+        "message": f"Validated {len(results)} rows",
+        "data": results
+    }

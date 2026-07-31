@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict, Any
 
 from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field
 
@@ -275,6 +275,7 @@ class ContainerItemOut(BaseModel):
 class PurchaseOrderItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    sellercloud_item_id: Optional[int] = None
     sku: Optional[str] = None
     product_name: Optional[str] = None
     qty_ordered: int
@@ -514,3 +515,24 @@ class POExportRequest(BaseModel):
     po_ids: Optional[list[int]] = None
     filter_status: Optional[str] = Field(None, description="invoice_delayed, delivery_delayed, or lefts_items")
     columns: Optional[list[str]] = Field(None, description="List of columns to export. If empty, all columns are exported.")
+
+class ValidateContainerRowRequest(BaseModel):
+    po_id: str
+    sku: str
+    qty: Optional[int] = 0
+
+class ValidateContainerBulkRequest(BaseModel):
+    items: List[ValidateContainerRowRequest]
+
+class UserActivityLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    user_id: Optional[uuid.UUID] = None
+    action: str
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    
+    # Optional field to show user info if needed
+    user_name: Optional[str] = None

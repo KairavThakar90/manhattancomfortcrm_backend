@@ -1161,6 +1161,7 @@ def trigger_sync(
 @router.post("/{sellercloud_po_id}/sync")
 def trigger_single_po_sync(
     sellercloud_po_id: int,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -1180,6 +1181,7 @@ def trigger_single_po_sync(
     """
     from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items, _get_or_create_warehouse
     from app.services.sellercloud_client import sellercloud_client
+    from app.services.activity_service import log_activity
     
     try:
         # Fetch PO detail from SellerCloud
@@ -1239,6 +1241,9 @@ def trigger_single_po_sync(
         _upsert_items(db, po_row.id, items)
         
         db.commit()
+        
+        # Log activity
+        log_activity(db, action="SYNC_PO", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(sellercloud_po_id))
         
         return {
             "sellercloud_po_id": sellercloud_po_id,
