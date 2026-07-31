@@ -288,7 +288,7 @@ class PurchaseOrderItemOut(BaseModel):
     is_bundle_component: bool
     expected_delivery_date: Optional[datetime] = None
     containers: List[ContainerSummary] = []  # Containers this item is in
-    comments: List[POItemCommentOut] = []  # Added item comments
+    comments: List['POItemCommentOut'] = []  # Added item comments
     
     @classmethod
     def model_validate(cls, obj, **kwargs):
