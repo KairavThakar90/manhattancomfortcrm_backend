@@ -188,6 +188,7 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/update-password")
+@router.post("/update-password")
 def update_password(
     request: UpdatePasswordRequest,
     current_user: models.User = Depends(auth_utils.get_current_user),

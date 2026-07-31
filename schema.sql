@@ -12,12 +12,17 @@ CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email           VARCHAR(255) UNIQUE NOT NULL,
     hashed_password VARCHAR(255) NOT NULL,
+    first_name      VARCHAR(120),
+    last_name       VARCHAR(120),
     full_name       VARCHAR(255),
     role            VARCHAR(50) NOT NULL DEFAULT 'user', -- user | admin
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(120);
 
 -- ---------------------------------------------------------
 -- 2. Companies (SellerCloud "Companies" - the entity that
@@ -140,9 +145,14 @@ CREATE TABLE IF NOT EXISTS purchase_order_comments (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     purchase_order_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
     user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+    parent_id         UUID REFERENCES purchase_order_comments(id) ON DELETE CASCADE,
     comment           TEXT NOT NULL,
+    is_edited         BOOLEAN NOT NULL DEFAULT FALSE,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE purchase_order_comments ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES purchase_order_comments(id) ON DELETE CASCADE;
+ALTER TABLE purchase_order_comments ADD COLUMN IF NOT EXISTS is_edited BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_po_comments_po ON purchase_order_comments(purchase_order_id);
 
@@ -170,6 +180,21 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_poitems_po ON purchase_order_items(purchase_order_id);
+
+-- ---------------------------------------------------------
+-- 6a. Purchase Order Item Comments
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS purchase_order_item_comments (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    purchase_order_item_id  UUID NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+    user_id                 UUID REFERENCES users(id) ON DELETE SET NULL,
+    parent_id               UUID REFERENCES purchase_order_item_comments(id) ON DELETE CASCADE,
+    comment                 TEXT NOT NULL,
+    is_edited               BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_item_comments_item ON purchase_order_item_comments(purchase_order_item_id);
 
 -- ---------------------------------------------------------
 -- 6b. Per-vendor container lead time (days from payment/order
