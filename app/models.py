@@ -16,6 +16,8 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
+    first_name = Column(String(120))
+    last_name = Column(String(120))
     full_name = Column(String(255))
     role = Column(String(50), default="user", nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -23,6 +25,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     
     po_comments = relationship("PurchaseOrderComment", back_populates="user")
+    po_item_comments = relationship("PurchaseOrderItemComment", back_populates="user")
 
 
 class Company(Base):
@@ -153,11 +156,30 @@ class PurchaseOrderComment(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     purchase_order_id = Column(UUID(as_uuid=True), ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_comments.id", ondelete="CASCADE"), nullable=True)
     comment = Column(Text, nullable=False)
+    is_edited = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     purchase_order = relationship("PurchaseOrder", back_populates="comments")
     user = relationship("User", back_populates="po_comments")
+    replies = relationship("PurchaseOrderComment")
+
+
+class PurchaseOrderItemComment(Base):
+    __tablename__ = "purchase_order_item_comments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purchase_order_item_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_items.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_item_comments.id", ondelete="CASCADE"), nullable=True)
+    comment = Column(Text, nullable=False)
+    is_edited = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    item = relationship("PurchaseOrderItem", back_populates="comments")
+    user = relationship("User", back_populates="po_item_comments")
+    replies = relationship("PurchaseOrderItemComment")
 
 
 
@@ -184,6 +206,7 @@ class PurchaseOrderItem(Base):
 
     purchase_order = relationship("PurchaseOrder", back_populates="items")
     container_links = relationship("PurchaseOrderItemContainer", back_populates="item", cascade="all, delete-orphan")
+    comments = relationship("PurchaseOrderItemComment", back_populates="item", cascade="all, delete-orphan")
 
 
 class ShippingContainer(Base):

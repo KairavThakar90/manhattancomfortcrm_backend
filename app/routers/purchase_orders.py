@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import csv
 import io
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
@@ -11,11 +11,23 @@ from sqlalchemy import and_, or_
 from app.database import get_db
 from app.auth import get_current_user
 from app import models
-from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut
+from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut
+from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
 
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
+
+
+async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False):
+    if not tagged_user_ids:
+        return
+    import app.models as models
+    users = db.query(models.User).filter(models.User.id.in_(tagged_user_ids)).all()
+    emails = [u.email for u in users if u.email]
+    if emails:
+        background_tasks.add_task(send_tag_notification, emails, commenter_name, link, is_edit)
+
 
 
 @router.get("/filters/all-categories")
@@ -302,13 +314,15 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{po_id}/comments", response_model=POCommentOut)
-def add_po_comment(
+async def add_po_comment(
     po_id: str,
     comment_data: POCommentCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
     import uuid
+    from app.config import settings
     try:
         po_uuid = uuid.UUID(po_id)
         filter_clause = models.PurchaseOrder.id == po_uuid
@@ -325,16 +339,104 @@ def add_po_comment(
     new_comment = models.PurchaseOrderComment(
         purchase_order_id=po.id,
         user_id=current_user.id,
-        comment=comment_data.comment
+        comment=comment_data.comment,
+        parent_id=comment_data.parent_id
     )
     db.add(new_comment)
     db.commit()
     db.refresh(new_comment)
-    
-    # Manually attach user_name for the response
     new_comment.user_name = current_user.full_name or current_user.email
     
+    # Process Tags
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.id}?comment_id={new_comment.id}"
+    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks)
+    
     return new_comment
+
+@router.put("/comments/{comment_id}", response_model=POCommentOut)
+async def update_po_comment(
+    comment_id: str,
+    comment_data: POCommentUpdate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    from app.config import settings
+    comment = db.query(models.PurchaseOrderComment).filter(models.PurchaseOrderComment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this comment")
+        
+    comment.comment = comment_data.comment
+    comment.is_edited = True
+    db.commit()
+    db.refresh(comment)
+    comment.user_name = current_user.full_name or current_user.email
+    
+    # Process Tags
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{comment.purchase_order_id}?comment_id={comment.id}"
+    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True)
+    
+    return comment
+
+@router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
+async def add_po_item_comment(
+    item_id: str,
+    comment_data: POItemCommentCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    from app.config import settings
+    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+        
+    new_comment = models.PurchaseOrderItemComment(
+        purchase_order_item_id=item.id,
+        user_id=current_user.id,
+        comment=comment_data.comment,
+        parent_id=comment_data.parent_id
+    )
+    db.add(new_comment)
+    db.commit()
+    db.refresh(new_comment)
+    new_comment.user_name = current_user.full_name or current_user.email
+    
+    # Process Tags
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{item.purchase_order_id}?item_id={item.id}&comment_id={new_comment.id}"
+    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks)
+    
+    return new_comment
+
+@router.put("/items/comments/{comment_id}", response_model=POItemCommentOut)
+async def update_po_item_comment(
+    comment_id: str,
+    comment_data: POCommentUpdate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    from app.config import settings
+    comment = db.query(models.PurchaseOrderItemComment).filter(models.PurchaseOrderItemComment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this comment")
+        
+    comment.comment = comment_data.comment
+    comment.is_edited = True
+    db.commit()
+    db.refresh(comment)
+    comment.user_name = current_user.full_name or current_user.email
+    
+    # Process Tags
+    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == comment.purchase_order_item_id).first()
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{item.purchase_order_id}?item_id={item.id}&comment_id={comment.id}"
+    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True)
+    
+    return comment
 
 
 @router.get("/filters/all")

@@ -1279,39 +1279,59 @@ async def preview_container_import(
         raise HTTPException(status_code=400, detail="Only CSV or Excel files are supported")
         
     try:
-        import pandas as pd
         import io
+        import csv
         
         contents = await file.read()
-        if file.filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(contents))
-        else:
-            df = pd.read_excel(io.BytesIO(contents))
-            
-        # Clean up column names (strip whitespace)
-        df.columns = [str(c).strip() for c in df.columns]
+        rows = []
+        headers = []
         
-        # Identify columns
-        po_col = next((c for c in df.columns if 'po' in c.lower() and 'id' in c.lower()), None)
-        if not po_col:
-            # Fallback if there is just "PO" or something
-            po_col = next((c for c in df.columns if c.lower() in ['po', 'po number', 'purchase order']), None)
+        if file.filename.endswith('.csv'):
+            text_content = contents.decode('utf-8-sig', errors='replace')
+            csv_reader = csv.reader(io.StringIO(text_content))
+            try:
+                headers = [str(h).strip() for h in next(csv_reader)]
+                for row_data in csv_reader:
+                    # pad row to match headers length
+                    row_data = row_data + [''] * (len(headers) - len(row_data))
+                    rows.append(dict(zip(headers, row_data)))
+            except StopIteration:
+                pass
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
+            sheet = wb.active
             
-        sku_col = next((c for c in df.columns if 'sku' in c.lower() or 'productid' in c.lower() or 'product id' in c.lower()), None)
-        qty_col = next((c for c in df.columns if 'qty' in c.lower() or 'quantity' in c.lower()), None)
+            header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            if header_row:
+                headers = [str(h).strip() if h is not None else f"col_{i}" for i, h in enumerate(header_row)]
+                for row_data in sheet.iter_rows(min_row=2, values_only=True):
+                    row_data = list(row_data) + [''] * (len(headers) - len(row_data))
+                    row_data = [str(cell) if cell is not None else "" for cell in row_data]
+                    rows.append(dict(zip(headers, row_data)))
+                    
+        # Identify columns
+        po_col = next((c for c in headers if 'po' in c.lower() and 'id' in c.lower()), None)
+        if not po_col:
+            po_col = next((c for c in headers if c.lower() in ['po', 'po number', 'purchase order']), None)
+            
+        sku_col = next((c for c in headers if 'sku' in c.lower() or 'productid' in c.lower() or 'product id' in c.lower()), None)
+        qty_col = next((c for c in headers if 'qty' in c.lower() or 'quantity' in c.lower()), None)
         
         if not po_col or not sku_col:
-            raise HTTPException(status_code=400, detail=f"Could not identify PO ID or SKU columns. Found columns: {', '.join(df.columns)}")
+            raise HTTPException(status_code=400, detail=f"Could not identify PO ID or SKU columns. Found columns: {', '.join(headers)}")
             
         results = []
         
-        for index, row in df.iterrows():
-            po_val = str(row[po_col]).strip() if pd.notna(row[po_col]) else ""
-            sku_val = str(row[sku_col]).strip() if pd.notna(row[sku_col]) else ""
+        for index, row in enumerate(rows):
+            po_val = str(row.get(po_col, "")).strip()
+            sku_val = str(row.get(sku_col, "")).strip()
+            
             qty_val = 0
-            if qty_col and pd.notna(row[qty_col]):
+            raw_qty = row.get(qty_col)
+            if raw_qty:
                 try:
-                    qty_val = int(float(row[qty_col]))
+                    qty_val = int(float(raw_qty))
                 except ValueError:
                     qty_val = 0
                     
