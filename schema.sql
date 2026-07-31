@@ -242,3 +242,18 @@ CREATE TABLE IF NOT EXISTS sync_logs (
     started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at    TIMESTAMPTZ
 );
+
+-- ---------------------------------------------------------
+-- 8. User activity logs (login, sync, create, etc.)
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_activity_logs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+    action        VARCHAR(50) NOT NULL,   -- e.g. LOGIN, SYNC_PO, CREATE_USER
+    entity_type   VARCHAR(50),            -- e.g. PURCHASE_ORDER, CONTAINER
+    entity_id     VARCHAR(255),
+    details       JSONB,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON user_activity_logs(user_id);

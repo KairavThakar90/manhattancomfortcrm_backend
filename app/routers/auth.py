@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -6,6 +6,9 @@ from datetime import datetime
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
+from app.services.email_service import send_welcome_email
+from app.services.activity_service import log_activity
+from app.config import settings
 from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UpdatePasswordRequest
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -29,6 +32,9 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
     access_token = auth_utils.create_access_token(data={"sub": str(user.id)})
     refresh_token = auth_utils.create_refresh_token(data={"sub": str(user.id)})
+    
+    # Log the activity
+    log_activity(db, action="LOGIN", user_id=user.id, entity_type="USER", entity_id=str(user.id))
     
     return Token(
         access_token=access_token,
@@ -141,7 +147,7 @@ def get_all_users(
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
+def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Create a new user account.
     
@@ -183,6 +189,19 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    
+    # Log the activity
+    log_activity(db, action="REGISTER", user_id=new_user.id, entity_type="USER", entity_id=str(new_user.id))
+
+    # Send welcome email in background
+    login_url = f"{settings.FRONTEND_ORIGIN}/login"
+    background_tasks.add_task(
+        send_welcome_email,
+        email_to=user_data.email,
+        password=user_data.password,
+        login_link=login_url,
+        first_name=user_data.first_name
+    )
     
     return UserOut.model_validate(new_user)
 
