@@ -19,14 +19,14 @@ from app.services.optimized_sync_service import OptimizedSyncService, get_sync_r
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
 
 
-async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False):
+async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, context_text=""):
     if not tagged_user_ids:
         return
     import app.models as models
     users = db.query(models.User).filter(models.User.id.in_(tagged_user_ids)).all()
     emails = [u.email for u in users if u.email]
     if emails:
-        background_tasks.add_task(send_tag_notification, emails, commenter_name, link, is_edit)
+        background_tasks.add_task(send_tag_notification, emails, commenter_name, link, is_edit, context_text)
 
 
 
@@ -348,8 +348,9 @@ async def add_po_comment(
     new_comment.user_name = current_user.full_name or current_user.email
     
     # Process Tags
+    context_text = f"PO #{po.sellercloud_po_id}" if po else "a Purchase Order"
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.id}?comment_id={new_comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks)
+    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks, context_text=context_text)
     
     return new_comment
 
@@ -375,8 +376,10 @@ async def update_po_comment(
     comment.user_name = current_user.full_name or current_user.email
     
     # Process Tags
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == comment.purchase_order_id).first()
+    context_text = f"PO #{po.sellercloud_po_id}" if po else "a Purchase Order"
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{comment.purchase_order_id}?comment_id={comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True)
+    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True, context_text=context_text)
     
     return comment
 
@@ -405,8 +408,9 @@ async def add_po_item_comment(
     new_comment.user_name = current_user.full_name or current_user.email
     
     # Process Tags
+    context_text = f"Item {item.sku}" if item else "a PO Item"
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{item.purchase_order_id}?item_id={item.id}&comment_id={new_comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks)
+    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks, context_text=context_text)
     
     return new_comment
 
@@ -433,8 +437,9 @@ async def update_po_item_comment(
     
     # Process Tags
     item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == comment.purchase_order_item_id).first()
+    context_text = f"Item {item.sku}" if item else "a PO Item"
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{item.purchase_order_id}?item_id={item.id}&comment_id={comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True)
+    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True, context_text=context_text)
     
     return comment
 

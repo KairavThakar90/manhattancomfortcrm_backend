@@ -16,19 +16,21 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=True
 )
 
-async def send_tag_notification(emails: list[str], commenter_name: str, link: str, is_edit: bool = False):
+async def send_tag_notification(emails: list[str], commenter_name: str, link: str, is_edit: bool = False, context_text: str = ""):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         logger.warning("SMTP credentials not configured. Skipping email notification.")
         return
 
-    subject = f"Manhattan CRM: {commenter_name} mentioned you in a comment"
-    if is_edit:
-        subject = f"Manhattan CRM: {commenter_name} edited a comment you were mentioned in"
+    action_text = "edited a comment you were mentioned in" if is_edit else "mentioned you in a comment"
+    
+    subject = f"Manhattan CRM: {commenter_name} {action_text}"
+    if context_text:
+        subject += f" on {context_text}"
 
     html = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px;">
         <h2>You were mentioned!</h2>
-        <p><strong>{commenter_name}</strong> has {'edited a comment mentioning you' if is_edit else 'mentioned you in a comment'}.</p>
+        <p><strong>{commenter_name}</strong> has {action_text}{f' on <strong>{context_text}</strong>' if context_text else ''}.</p>
         <p>Click the link below to view it:</p>
         <a href="{link}" style="display: inline-block; padding: 10px 15px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">View Comment</a>
     </div>
