@@ -13,9 +13,10 @@ class UserLogin(BaseModel):
 
 class UserCreate(BaseModel):
     """Schema for creating a new user"""
+    first_name: str
+    last_name: str
     email: EmailStr
     password: str
-    full_name: Optional[str] = None
     role: str = "user"  # Default role
 
 
@@ -23,6 +24,8 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     full_name: Optional[str] = None
     role: str
 
@@ -40,6 +43,11 @@ class RefreshTokenRequest(BaseModel):
 
 class LogoutResponse(BaseModel):
     message: str
+
+
+class UpdatePasswordRequest(BaseModel):
+    password: str
+    confirm_password: str
 
 
 # ---------- Company ----------
@@ -280,6 +288,7 @@ class PurchaseOrderItemOut(BaseModel):
     is_bundle_component: bool
     expected_delivery_date: Optional[datetime] = None
     containers: List[ContainerSummary] = []  # Containers this item is in
+    comments: List['POItemCommentOut'] = []  # Added item comments
     
     @classmethod
     def model_validate(cls, obj, **kwargs):
@@ -312,7 +321,14 @@ class POCommentCreate(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("comment", "text", "message", "content"),
     )
+    parent_id: Optional[uuid.UUID] = None
+    tagged_user_ids: List[uuid.UUID] = []
     model_config = ConfigDict(populate_by_name=True)
+
+
+class POCommentUpdate(BaseModel):
+    comment: str
+    tagged_user_ids: List[uuid.UUID] = []
 
 
 class POCommentOut(BaseModel):
@@ -321,6 +337,24 @@ class POCommentOut(BaseModel):
     created_at: datetime
     user_id: Optional[uuid.UUID] = None
     user_name: Optional[str] = None
+    parent_id: Optional[uuid.UUID] = None
+    is_edited: bool = False
+    
+    model_config = ConfigDict(from_attributes=True)
+
+class POItemCommentCreate(BaseModel):
+    comment: str
+    parent_id: Optional[uuid.UUID] = None
+    tagged_user_ids: List[uuid.UUID] = []
+
+class POItemCommentOut(BaseModel):
+    id: uuid.UUID
+    comment: str
+    created_at: datetime
+    user_id: Optional[uuid.UUID] = None
+    user_name: Optional[str] = None
+    parent_id: Optional[uuid.UUID] = None
+    is_edited: bool = False
     
     model_config = ConfigDict(from_attributes=True)
 

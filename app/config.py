@@ -17,8 +17,14 @@ class Settings(BaseSettings):
     SELLERCLOUD_PASSWORD: str
     SELLERCLOUD_PO_VIEW_ID: int = 25  # the saved SellerCloud PO view/filter your Apps Script uses
 
-    # CORS
     FRONTEND_ORIGIN: str = "http://localhost:3000"
+
+    # Email / SMTP Settings
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
+    SMTP_FROM: str = ""
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
 
     class Config:
         env_file = ".env"

@@ -6,7 +6,7 @@ from datetime import datetime
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
-from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate
+from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UpdatePasswordRequest
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -130,6 +130,16 @@ def read_current_user(current_user=Depends(auth_utils.get_current_user)):
     return current_user
 
 
+@router.get("/users", response_model=list[UserOut])
+def get_all_users(
+    current_user: models.User = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a list of all active users, for tagging/mentioning in comments."""
+    users = db.query(models.User).filter(models.User.is_active == True).all()
+    return [UserOut.model_validate(u) for u in users]
+
+
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     """
@@ -137,7 +147,8 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     
     - **email**: Valid email address (must be unique)
     - **password**: Plain text password (will be hashed before storing)
-    - **full_name**: Optional full name
+    - **first_name**: First name of the user
+    - **last_name**: Last name of the user
     - **role**: User role (default: "user", can be "admin", "user", etc.)
     
     Note: This endpoint is public and doesn't require authentication.
@@ -158,10 +169,13 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     hashed_password = auth_utils.hash_password(user_data.password)
     
     # Create new user
+    full_name = f"{user_data.first_name} {user_data.last_name}".strip()
     new_user = models.User(
         email=user_data.email,
         hashed_password=hashed_password,
-        full_name=user_data.full_name,
+        first_name=user_data.first_name,
+        last_name=user_data.last_name,
+        full_name=full_name,
         role=user_data.role,
         is_active=True
     )
@@ -171,3 +185,27 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     db.refresh(new_user)
     
     return UserOut.model_validate(new_user)
+
+
+@router.put("/update-password")
+def update_password(
+    request: UpdatePasswordRequest,
+    current_user: models.User = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update password for the currently logged-in user.
+    """
+    if request.password != request.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match"
+        )
+    
+    # Hash the new password
+    hashed_password = auth_utils.hash_password(request.password)
+    current_user.hashed_password = hashed_password
+    
+    db.commit()
+    
+    return {"message": "Password updated successfully"}
