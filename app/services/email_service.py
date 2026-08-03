@@ -33,6 +33,11 @@ async def send_tag_notification(
     action_text = "edited a comment you were mentioned in" if is_edit else "mentioned you in a comment"
     
     subject = f"Manhattan Comfort Dashboard - {section}"
+    if po_number:
+        subject += f" (PO #{po_number}"
+        if sku:
+            subject += f", SKU: {sku}"
+        subject += ")"
 
     details_html = ""
     if po_number:

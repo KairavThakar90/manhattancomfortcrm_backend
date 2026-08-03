@@ -125,7 +125,7 @@ def get_all_filter_categories(
         validated_pos = []
         for po in data_list:
             try:
-                po_dict = PurchaseOrderOut.model_validate(po).model_dump()
+                po_dict = PurchaseOrderOut.model_validate(po).model_dump(mode='python', exclude={'items', 'comments'})
                 validated_pos.append(po_dict)
             except Exception as e:
                 print(f"Error validating PO {po.id}: {e}")
@@ -338,7 +338,7 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
         if comment.user:
             comment.user_name = comment.user.full_name or comment.user.email
             
-    return po
+    return PurchaseOrderOut.model_validate(po)
 
 
 @router.post("/{po_id}/comments", response_model=POCommentOut)
