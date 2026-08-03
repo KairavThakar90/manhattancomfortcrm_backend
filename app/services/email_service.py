@@ -16,37 +16,68 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=True
 )
 
-async def send_tag_notification(emails: list[str], commenter_name: str, link: str, is_edit: bool = False, context_text: str = ""):
+async def send_tag_notification(
+    emails: list[str], 
+    commenter_name: str, 
+    link: str, 
+    is_edit: bool = False, 
+    section: str = "Purchase Orders", 
+    po_number: str = None, 
+    sku: str = None, 
+    comment_text: str = ""
+):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         logger.warning("SMTP credentials not configured. Skipping email notification.")
         return
 
     action_text = "edited a comment you were mentioned in" if is_edit else "mentioned you in a comment"
     
-    subject = f"Manhattan CRM: {commenter_name} {action_text}"
-    if context_text:
-        subject += f" on {context_text}"
+    subject = f"Manhattan Comfort Dashboard - {section}"
+
+    details_html = ""
+    if po_number:
+        details_html += f"<p style='margin: 0 0 5px 0;'><strong>PO Number:</strong> {po_number}</p>"
+    if sku:
+        details_html += f"<p style='margin: 0 0 5px 0;'><strong>SKU:</strong> {sku}</p>"
 
     html = f"""
-    <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2>You were mentioned!</h2>
-        <p><strong>{commenter_name}</strong> has {action_text}{f' on <strong>{context_text}</strong>' if context_text else ''}.</p>
-        <p>Click the link below to view it:</p>
-        <a href="{link}" style="display: inline-block; padding: 10px 15px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">View Comment</a>
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
+        <h2 style="color: #333;">You were mentioned!</h2>
+        <p><strong>{commenter_name}</strong> has {action_text}.</p>
+        
+        <div style="background-color: #f9f9f9; padding: 15px; border-left: 4px solid #007bff; margin: 20px 0;">
+            {details_html}
+            <p style='margin: 15px 0 5px 0;'><strong>Comment:</strong></p>
+            <p style="white-space: pre-wrap; margin: 0;">{comment_text}</p>
+        </div>
+        
+        <p>Click the button below to view it in the dashboard:</p>
+        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
     </div>
     """
 
-    message = MessageSchema(
-        subject=subject,
-        recipients=emails,
-        body=html,
-        subtype=MessageType.html
-    )
+    if not emails:
+        return
+
+    # Add all tagged users as CC recipients (put first in TO, rest in CC)
+    to_email = emails[0]
+    cc_emails = emails[1:] if len(emails) > 1 else None
+
+    message_kwargs = {
+        "subject": subject,
+        "recipients": [to_email],
+        "body": html,
+        "subtype": MessageType.html
+    }
+    if cc_emails:
+        message_kwargs["cc"] = cc_emails
+
+    message = MessageSchema(**message_kwargs)
 
     fm = FastMail(conf)
     try:
         await fm.send_message(message)
-        logger.info(f"Sent notification email to {emails}")
+        logger.info(f"Sent notification email to TO: {to_email}, CC: {cc_emails}")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
 

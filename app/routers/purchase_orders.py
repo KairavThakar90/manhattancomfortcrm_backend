@@ -19,14 +19,24 @@ from app.services.optimized_sync_service import OptimizedSyncService, get_sync_r
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
 
 
-async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, context_text=""):
+async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, section="Purchase Orders", po_number=None, sku=None, comment_text=""):
     if not tagged_user_ids:
         return
     import app.models as models
     users = db.query(models.User).filter(models.User.id.in_(tagged_user_ids)).all()
     emails = [u.email for u in users if u.email]
     if emails:
-        background_tasks.add_task(send_tag_notification, emails, commenter_name, link, is_edit, context_text)
+        background_tasks.add_task(
+            send_tag_notification, 
+            emails=emails, 
+            commenter_name=commenter_name, 
+            link=link, 
+            is_edit=is_edit, 
+            section=section,
+            po_number=po_number,
+            sku=sku,
+            comment_text=comment_text
+        )
 
 
 
@@ -209,6 +219,7 @@ def list_purchase_orders(
     vendor_id: Optional[str] = None,
     sort_by: Optional[str] = Query(None, description="Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
+    search: Optional[str] = Query(None, description="Search by PO number, order title, or vendor name"),
     db: Session = Depends(get_db),
 ):
     """
@@ -232,6 +243,17 @@ def list_purchase_orders(
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
     if vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
+        
+    if search:
+        search_term = f"%{search}%"
+        search_conditions = [
+            models.PurchaseOrder.purchase_title.ilike(search_term),
+            models.PurchaseOrder.vendor.has(models.Vendor.name.ilike(search_term))
+        ]
+        if search.isdigit():
+            search_conditions.append(models.PurchaseOrder.sellercloud_po_id == int(search))
+            
+        q = q.filter(or_(*search_conditions))
 
     # Apply sorting
     sort_field_map = {
@@ -261,7 +283,7 @@ def list_purchase_orders(
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
     
     # Now convert to dicts
-    results = [po.model_dump(mode='python') for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
     
     # Build response with meta object
     return {
@@ -348,9 +370,19 @@ async def add_po_comment(
     new_comment.user_name = current_user.full_name or current_user.email
     
     # Process Tags
-    context_text = f"PO #{po.sellercloud_po_id}" if po else "a Purchase Order"
-    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.id}?comment_id={new_comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks, context_text=context_text)
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?comment_id={new_comment.id}"
+    await process_comment_tags(
+        db=db,
+        tagged_user_ids=comment_data.tagged_user_ids,
+        commenter_name=new_comment.user_name,
+        link=link,
+        background_tasks=background_tasks,
+        is_edit=False,
+        section="Purchase Orders",
+        po_number=str(po.sellercloud_po_id) if po else None,
+        sku=None,
+        comment_text=new_comment.comment
+    )
     
     return new_comment
 
@@ -377,9 +409,19 @@ async def update_po_comment(
     
     # Process Tags
     po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == comment.purchase_order_id).first()
-    context_text = f"PO #{po.sellercloud_po_id}" if po else "a Purchase Order"
-    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{comment.purchase_order_id}?comment_id={comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True, context_text=context_text)
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?comment_id={comment.id}" if po else ""
+    await process_comment_tags(
+        db=db,
+        tagged_user_ids=comment_data.tagged_user_ids,
+        commenter_name=comment.user_name,
+        link=link,
+        background_tasks=background_tasks,
+        is_edit=True,
+        section="Purchase Orders",
+        po_number=str(po.sellercloud_po_id) if po else None,
+        sku=None,
+        comment_text=comment.comment
+    )
     
     return comment
 
@@ -408,9 +450,20 @@ async def add_po_item_comment(
     new_comment.user_name = current_user.full_name or current_user.email
     
     # Process Tags
-    context_text = f"Item {item.sku}" if item else "a PO Item"
-    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{item.purchase_order_id}?item_id={item.id}&comment_id={new_comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, new_comment.user_name, link, background_tasks, context_text=context_text)
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == item.purchase_order_id).first() if item else None
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?item_id={item.sellercloud_item_id}&comment_id={new_comment.id}" if po else ""
+    await process_comment_tags(
+        db=db,
+        tagged_user_ids=comment_data.tagged_user_ids,
+        commenter_name=new_comment.user_name,
+        link=link,
+        background_tasks=background_tasks,
+        is_edit=False,
+        section="Purchase Orders",
+        po_number=str(po.sellercloud_po_id) if po else None,
+        sku=item.sku if item else None,
+        comment_text=new_comment.comment
+    )
     
     return new_comment
 
@@ -437,9 +490,20 @@ async def update_po_item_comment(
     
     # Process Tags
     item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == comment.purchase_order_item_id).first()
-    context_text = f"Item {item.sku}" if item else "a PO Item"
-    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{item.purchase_order_id}?item_id={item.id}&comment_id={comment.id}"
-    await process_comment_tags(db, comment_data.tagged_user_ids, comment.user_name, link, background_tasks, is_edit=True, context_text=context_text)
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == item.purchase_order_id).first() if item else None
+    link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?item_id={item.sellercloud_item_id}&comment_id={comment.id}" if po else ""
+    await process_comment_tags(
+        db=db,
+        tagged_user_ids=comment_data.tagged_user_ids,
+        commenter_name=comment.user_name,
+        link=link,
+        background_tasks=background_tasks,
+        is_edit=True,
+        section="Purchase Orders",
+        po_number=str(po.sellercloud_po_id) if po else None,
+        sku=item.sku if item else None,
+        comment_text=comment.comment
+    )
     
     return comment
 
@@ -499,7 +563,7 @@ def get_filtered_pos(
         # Helper function to create response object
         def create_category_response(data_list, total):
             po_models = [PurchaseOrderOut.model_validate(r) for r in data_list]
-            results = [po.model_dump(mode='python') for po in po_models]
+            results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
             
             return {
                 "data": results,
@@ -673,7 +737,7 @@ def get_filtered_pos(
     
     # Convert to response format
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
-    results = [po.model_dump(mode='python') for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
     
     return {
         "total": total,
@@ -741,7 +805,7 @@ def get_new_pos_without_invoice(
     )
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
-    results = [po.model_dump(mode='python') for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
     
     return {
         "total": total,
@@ -807,7 +871,7 @@ def get_invoice_delayed_pos(
     )
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
-    results = [po.model_dump(mode='python') for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
     
     return {
         "total": total,
@@ -884,7 +948,7 @@ def get_delivery_overdue_pos(
     paginated_pos = overdue_pos[start:end]
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in paginated_pos]
-    results = [po.model_dump(mode='python') for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
     
     return {
         "total": total,
@@ -954,7 +1018,7 @@ def get_pos_with_remaining_items(
     paginated_pos = pos_with_remaining[start:end]
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in paginated_pos]
-    results = [po.model_dump(mode='python') for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
     
     return {
         "total": total,
@@ -1023,7 +1087,7 @@ def get_pos_missing_invoice(
             "has_next": page * page_size < total,
             "has_prev": page > 1
         },
-        "results": [PurchaseOrderOut.model_validate(r).model_dump() for r in rows],
+        "results": [PurchaseOrderOut.model_validate(r).model_dump(mode='python', exclude={'items'}) for r in rows],
     }
 
 
@@ -1091,7 +1155,7 @@ def get_overdue_containers(
             "has_next": page * page_size < total,
             "has_prev": page > 1
         },
-        "results": [PurchaseOrderOut.model_validate(r).model_dump() for r in paginated_pos],
+        "results": [PurchaseOrderOut.model_validate(r).model_dump(mode='python', exclude={'items'}) for r in paginated_pos],
     }
 
 
