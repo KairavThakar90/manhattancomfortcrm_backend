@@ -68,6 +68,8 @@ def get_all_filter_categories(
     # Base query
     base_query = db.query(models.PurchaseOrder).options(
         joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
         joinedload(models.PurchaseOrder.items)
     )
     
@@ -237,7 +239,9 @@ def list_purchase_orders(
     """
     q = db.query(models.PurchaseOrder).options(
         joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-        joinedload(models.PurchaseOrder.vendor)
+        joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
@@ -283,7 +287,7 @@ def list_purchase_orders(
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
     
     # Now convert to dicts
-    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
     
     # Build response with meta object
     return {
@@ -319,6 +323,8 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
             joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user)
         )
         .filter(filter_clause)
@@ -552,7 +558,9 @@ def get_filtered_pos(
             db.query(models.PurchaseOrder)
             .options(
                 joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-                joinedload(models.PurchaseOrder.vendor)
+                joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
             )
         )
         
@@ -563,7 +571,7 @@ def get_filtered_pos(
         # Helper function to create response object
         def create_category_response(data_list, total):
             po_models = [PurchaseOrderOut.model_validate(r) for r in data_list]
-            results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+            results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
             
             return {
                 "data": results,
@@ -641,7 +649,9 @@ def get_filtered_pos(
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
     )
     
@@ -737,7 +747,7 @@ def get_filtered_pos(
     
     # Convert to response format
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
-    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
     
     return {
         "total": total,
@@ -783,7 +793,9 @@ def get_new_pos_without_invoice(
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
         .filter(
             and_(
@@ -805,7 +817,7 @@ def get_new_pos_without_invoice(
     )
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
-    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
     
     return {
         "total": total,
@@ -849,7 +861,9 @@ def get_invoice_delayed_pos(
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
         .filter(
             and_(
@@ -871,7 +885,7 @@ def get_invoice_delayed_pos(
     )
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
-    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
     
     return {
         "total": total,
@@ -917,7 +931,9 @@ def get_delivery_overdue_pos(
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
         .filter(
             and_(
@@ -948,7 +964,7 @@ def get_delivery_overdue_pos(
     paginated_pos = overdue_pos[start:end]
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in paginated_pos]
-    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
     
     return {
         "total": total,
@@ -988,7 +1004,9 @@ def get_pos_with_remaining_items(
         .join(models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id)
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
     )
     
@@ -1018,7 +1036,7 @@ def get_pos_with_remaining_items(
     paginated_pos = pos_with_remaining[start:end]
     
     po_models = [PurchaseOrderOut.model_validate(r) for r in paginated_pos]
-    results = [po.model_dump(mode='python', exclude={'items'}) for po in po_models]
+    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
     
     return {
         "total": total,
@@ -1057,7 +1075,9 @@ def get_pos_missing_invoice(
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
         .filter(
             and_(
@@ -1087,7 +1107,7 @@ def get_pos_missing_invoice(
             "has_next": page * page_size < total,
             "has_prev": page > 1
         },
-        "results": [PurchaseOrderOut.model_validate(r).model_dump(mode='python', exclude={'items'}) for r in rows],
+        "results": [PurchaseOrderOut.model_validate(r).model_dump(mode='python', exclude={'items', 'comments'}) for r in rows],
     }
 
 
@@ -1116,7 +1136,9 @@ def get_overdue_containers(
         db.query(models.PurchaseOrder)
         .options(
             joinedload(models.PurchaseOrder.items),
-            joinedload(models.PurchaseOrder.vendor)
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
         .filter(
             and_(
@@ -1155,7 +1177,7 @@ def get_overdue_containers(
             "has_next": page * page_size < total,
             "has_prev": page > 1
         },
-        "results": [PurchaseOrderOut.model_validate(r).model_dump(mode='python', exclude={'items'}) for r in paginated_pos],
+        "results": [PurchaseOrderOut.model_validate(r).model_dump(mode='python', exclude={'items', 'comments'}) for r in paginated_pos],
     }
 
 
@@ -1464,6 +1486,8 @@ def export_single_po_csv(
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
             joinedload(models.PurchaseOrder.comments)
                 .joinedload(models.PurchaseOrderComment.user)
         )
@@ -1570,6 +1594,8 @@ def export_multiple_pos_csv(
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
             joinedload(models.PurchaseOrder.comments)
                 .joinedload(models.PurchaseOrderComment.user)
         )
