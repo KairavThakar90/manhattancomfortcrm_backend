@@ -411,6 +411,7 @@ class PurchaseOrderOut(BaseModel):
     total_qty_received: Optional[int] = None
     total_qty_remaining: Optional[int] = None  # Calculated: total_qty_ordered - total_qty_received
     total_qty_in_container: Optional[int] = None
+    total_comments_count: int = 0
     
     # Container information
     container_names: List[str] = []  # All unique container names for this PO
@@ -461,6 +462,14 @@ class PurchaseOrderOut(BaseModel):
         
         # Calculate status flags
         today = datetime.now(timezone.utc).date()
+        
+        # Calculate total comments
+        total_comments = len(instance.comments) if hasattr(instance, 'comments') and instance.comments else 0
+        if instance.items:
+            for item in instance.items:
+                if hasattr(item, 'comments') and item.comments:
+                    total_comments += len(item.comments)
+        instance.total_comments_count = total_comments
         
         # 1. Check if invoice is delayed (missing after 10 days)
         if instance.invoice_date:
