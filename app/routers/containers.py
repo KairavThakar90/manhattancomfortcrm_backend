@@ -110,8 +110,13 @@ def list_containers(
     if date_from:
         query = query.filter(models.ShippingContainer.received_date >= date_from)
     if date_to:
+        # If date_to has no time component (midnight), extend it to the end of the day
+        if date_to.time() == datetime.min.time():
+            from datetime import time
+            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
         query = query.filter(models.ShippingContainer.received_date <= date_to)
-        query = query.distinct()
+        
+    query = query.distinct()
 
     total = query.count()
     containers = (

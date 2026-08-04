@@ -272,6 +272,10 @@ def list_purchase_orders(
     if date_from:
         q = q.filter(models.PurchaseOrder.date_ordered >= date_from)
     if date_to:
+        # If date_to has no time component (midnight), extend it to the end of the day
+        if date_to.time() == datetime.min.time():
+            from datetime import time
+            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
         q = q.filter(models.PurchaseOrder.date_ordered <= date_to)
 
     # Apply sorting
