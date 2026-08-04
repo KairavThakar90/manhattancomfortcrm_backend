@@ -432,6 +432,10 @@ def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100)
                 # Use upsert (not delete+insert) so PurchaseOrderItemContainer
                 # rows (container links) are never wiped on re-sync.
                 _upsert_items(db, po.id, line_items)
+                
+                # Auto-update shipment status
+                from app.services.po_service import recalculate_po_shipment_status
+                recalculate_po_shipment_status(db, str(po.id))
 
             db.commit()
             synced += 1

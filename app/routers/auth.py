@@ -171,6 +171,20 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
             detail="Email already registered"
         )
     
+    # Check vendor role requirements
+    if user_data.role == "vendor":
+        if not user_data.vendor_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="vendor_id is required when role is 'vendor'"
+            )
+        vendor_exists = db.query(models.Vendor).filter(models.Vendor.id == user_data.vendor_id).first()
+        if not vendor_exists:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Vendor not found"
+            )
+    
     # Hash the password
     hashed_password = auth_utils.hash_password(user_data.password)
     
@@ -183,6 +197,7 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
         last_name=user_data.last_name,
         full_name=full_name,
         role=user_data.role,
+        vendor_id=user_data.vendor_id if user_data.role == "vendor" else None,
         is_active=True
     )
     

@@ -16,6 +16,7 @@ from app.schemas import (
     ContainerUpdate, ContainerAddItems
 )
 from app.services.sellercloud_client import SellerCloudClient
+from app.services.activity_service import log_activity
 
 router = APIRouter(
     prefix="/containers",
@@ -37,6 +38,8 @@ def list_containers(
     po_id: Optional[str] = Query(None, description="Filter by Purchase Order UUID"),
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
+    date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
+    date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
     db: Session = Depends(get_db),
 ):
     """
@@ -97,6 +100,12 @@ def list_containers(
             )
         if vendor_id:
             query = query.filter(models.PurchaseOrder.vendor_id == vendor_id)
+
+    # Filter by received date range
+    if date_from:
+        query = query.filter(models.ShippingContainer.received_date >= date_from)
+    if date_to:
+        query = query.filter(models.ShippingContainer.received_date <= date_to)
         query = query.distinct()
 
     total = query.count()
@@ -527,6 +536,7 @@ def update_container(
     container_id: str,
     update_data: ContainerUpdate,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Update a container's name, estimated arrival date, or received date.
@@ -564,6 +574,8 @@ def update_container(
     db.commit()
     db.refresh(container)
 
+    log_activity(db, action="UPDATE_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details=update_data.model_dump(mode='json', exclude_unset=True))
+
     return {
         "success": True,
         "message": "Container updated successfully",
@@ -585,6 +597,7 @@ def add_items_to_container(
     container_id: str,
     items_data: ContainerAddItems,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Add items to an existing container. Syncs to SellerCloud and saves locally.
@@ -661,6 +674,14 @@ def add_items_to_container(
 
     container.updated_at = datetime.utcnow()
     db.commit()
+
+    # Recalculate PO shipment status for affected POs
+    from app.services.po_service import recalculate_po_shipment_status
+    affected_po_ids = set(item.purchase_order_id for _, item in resolved_items if item.purchase_order_id)
+    for po_id in affected_po_ids:
+        recalculate_po_shipment_status(db, str(po_id))
+
+    log_activity(db, action="ADD_ITEMS_TO_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details={"items_added": len(resolved_items)})
 
     return {
         "success": True,

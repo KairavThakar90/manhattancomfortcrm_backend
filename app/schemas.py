@@ -18,6 +18,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     role: str = "user"  # Default role
+    vendor_id: Optional[uuid.UUID] = None
 
 
 class UserOut(BaseModel):
@@ -391,6 +392,7 @@ class PurchaseOrderOut(BaseModel):
     company_id: Optional[uuid.UUID] = None
     vendor_id: Optional[uuid.UUID] = None
     vendor: Optional[VendorSummary] = None  # Nested vendor information
+    status: Optional[str] = None
     items: List[PurchaseOrderItemOut] = []
     comments: List[POCommentOut] = []
     
@@ -547,5 +549,8 @@ class UserActivityLogOut(BaseModel):
     details: Optional[Dict[str, Any]] = None
     created_at: datetime
     
-    # Optional field to show user info if needed
-    user_name: Optional[str] = None
+    # Optional nested user details for display
+    user: Optional[UserOut] = None
+
+class POStatusUpdate(BaseModel):
+    status: Optional[str] = Field(None, description="E.g. NOT_STARTED, IN_PRODUCTION, DELAYED, COMPLETED, NOT_PLANNED, PLANNED, PARTIALLY_SHIPPED, SHIPPED")

@@ -33,6 +33,11 @@ async def send_tag_notification(
     action_text = "edited a comment you were mentioned in" if is_edit else "mentioned you in a comment"
     
     subject = f"Manhattan Comfort Dashboard - {section}"
+    if po_number:
+        subject += f" (PO #{po_number}"
+        if sku:
+            subject += f", SKU: {sku}"
+        subject += ")"
 
     details_html = ""
     if po_number:
@@ -104,7 +109,7 @@ async def send_welcome_email(email_to: str, password: str, login_link: str, firs
     """
 
     message = MessageSchema(
-        subject=subject,
+        subject="Welcome to Manhattan CRM",
         recipients=[email_to],
         body=html,
         subtype=MessageType.html
@@ -113,6 +118,59 @@ async def send_welcome_email(email_to: str, password: str, login_link: str, firs
     fm = FastMail(conf)
     try:
         await fm.send_message(message)
-        logger.info(f"Sent welcome email to {email_to}")
     except Exception as e:
-        logger.error(f"Failed to send welcome email: {e}")
+        logger.error(f"Failed to send welcome email to {email_to}: {e}")
+
+async def send_po_status_update_email(
+    db, 
+    po_number: str, 
+    old_status: str, 
+    new_status: str, 
+    vendor_name: str
+):
+    from app.models import User
+    
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        logger.warning("SMTP credentials not configured. Skipping email notification.")
+        return
+
+    # Find all admins
+    admins = db.query(User).filter(User.role == "admin").all()
+    emails = [admin.email for admin in admins if admin.email]
+    
+    if not emails:
+        return
+
+    subject = f"PO #{po_number} Status Update - {vendor_name}"
+    
+    changes_html = ""
+    if old_status != new_status:
+        changes_html += f"<p><strong>Status:</strong> {old_status or 'None'} &rarr; {new_status or 'None'}</p>"
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
+        <h2 style="color: #333;">Purchase Order Status Updated</h2>
+        <p style="font-size: 16px; color: #555;">
+            Vendor <strong>{vendor_name}</strong> has updated the status for PO <strong>#{po_number}</strong>.
+        </p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin-top: 15px; border-left: 4px solid #007bff;">
+            {changes_html}
+        </div>
+        <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
+            <p>This is an automated notification from the Manhattan Comfort Dashboard.</p>
+        </div>
+    </div>
+    """
+
+    message = MessageSchema(
+        subject=subject,
+        recipients=emails,
+        body=html,
+        subtype=MessageType.html
+    )
+
+    fm = FastMail(conf)
+    try:
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send PO status update email: {e}")
