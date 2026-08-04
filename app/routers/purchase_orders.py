@@ -219,8 +219,8 @@ def get_status_counts(db: Session = Depends(get_db)):
 
 @router.get("")
 def list_purchase_orders(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=200),
+    page: Optional[int] = Query(None, ge=1, description="Page number. Leave empty for all."),
+    page_size: Optional[int] = Query(None, ge=1, description="Items per page. Leave empty for all."),
     status_code: Optional[int] = Query(None, description="Raw SellerCloud PurchaseOrderStatus code"),
     vendor_id: Optional[str] = None,
     sort_by: Optional[str] = Query(None, description="Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount"),
@@ -291,11 +291,11 @@ def list_purchase_orders(
         q = q.order_by(sort_field.desc())
 
     total = q.count()
-    rows = (
-        q.offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    
+    if page and page_size:
+        rows = q.offset((page - 1) * page_size).limit(page_size).all()
+    else:
+        rows = q.all()
     
     # Convert to Pydantic models BEFORE converting to dicts
     # This ensures model_validate can access container_links
@@ -307,15 +307,15 @@ def list_purchase_orders(
     # Build response with meta object
     return {
         "total": total,
-        "page": page,
-        "page_size": page_size,
+        "page": page if page else 1,
+        "page_size": page_size if page_size else total,
         "meta": {
             "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0,
-            "has_next": page * page_size < total,
-            "has_prev": page > 1
+            "page": page if page else 1,
+            "page_size": page_size if page_size else total,
+            "total_pages": (total + page_size - 1) // page_size if (page_size and page_size > 0) else 1,
+            "has_next": (page * page_size < total) if (page and page_size) else False,
+            "has_prev": (page > 1) if page else False
         },
         "results": results,
     }
