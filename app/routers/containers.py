@@ -68,11 +68,16 @@ def list_containers(
     elif received is False:
         query = query.filter(models.ShippingContainer.received_date.is_(None))
 
-    # Container name search
+    # Container name or ID search
     if search:
-        query = query.filter(
+        from sqlalchemy import or_
+        search_conditions = [
             models.ShippingContainer.container_name.ilike(f"%{search}%")
-        )
+        ]
+        if search.isdigit():
+            search_conditions.append(models.ShippingContainer.sellercloud_container_id == int(search))
+            
+        query = query.filter(or_(*search_conditions))
 
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:
