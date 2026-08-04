@@ -234,7 +234,7 @@ def get_po_items_for_container(
                 product_name=item.product_name,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
-                qty_remaining=max(0, item.qty_ordered - item.qty_received),
+                qty_remaining=qty_available,
                 qty_already_in_containers=qty_already,
                 qty_available_for_container=qty_available,
                 existing_containers=existing_containers,
