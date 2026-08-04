@@ -1576,6 +1576,7 @@ def validate_container_items_bulk(
                 "product_name": po_item.product_name,
                 "qty_ordered": po_item.qty_ordered,
                 "qty_received": po_item.qty_received,
+                "remaining_qty": max(0, po_item.qty_ordered - (po_item.qty_received or 0)),
                 "qty_already_in_containers": qty_already,
                 "qty_available_for_container": qty_available
             }
