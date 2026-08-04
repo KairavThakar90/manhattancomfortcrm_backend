@@ -20,10 +20,12 @@ class User(Base):
     last_name = Column(String(120))
     full_name = Column(String(255))
     role = Column(String(50), default="user", nullable=False)
+    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    vendor = relationship("Vendor")
     po_comments = relationship("PurchaseOrderComment", back_populates="user")
     po_item_comments = relationship("PurchaseOrderItemComment", back_populates="user")
 
@@ -135,6 +137,7 @@ class PurchaseOrder(Base):
     total_amount = Column(Numeric(14, 2))
     currency = Column(String(10), default="USD")
     notes = Column(Text)
+    status = Column(String(50), nullable=True)
     
     # Warehouse Info (ForeignKey to Warehouse table)
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))

@@ -184,8 +184,7 @@ class OptimizedSyncService:
         self, 
         days: int = 30, 
         skip_with_containers: bool = True,
-        limit: Optional[int] = None,
-        max_duration_seconds: int = 50
+        limit: Optional[int] = None
     ):
         """
         **OPTIMIZED BULK CONTAINER SYNC** - Dramatically reduces bandwidth.
@@ -249,11 +248,6 @@ class OptimizedSyncService:
             
             # Process each PO
             for idx, po in enumerate(pos, 1):
-                if time.time() - start_time > max_duration_seconds:
-                    msg = f"Reached execution time limit ({max_duration_seconds}s). Stopped early to prevent timeout. Please run sync again to continue."
-                    errors.append(msg)
-                    stats["stopped_early"] = True
-                    break
 
                 if not po.sellercloud_po_id:
                     stats["pos_skipped"] += 1

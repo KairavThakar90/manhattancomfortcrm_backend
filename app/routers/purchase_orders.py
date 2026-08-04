@@ -11,10 +11,11 @@ from sqlalchemy import and_, or_
 from app.database import get_db
 from app.auth import get_current_user
 from app import models
-from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut
+from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate
 from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
+from app.services.activity_service import log_activity
 
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
 
@@ -45,7 +46,8 @@ def get_all_filter_categories(
     vendor_id: Optional[int] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Get all filter categories in one response.
@@ -74,7 +76,9 @@ def get_all_filter_categories(
     )
     
     # Apply vendor filter if provided
-    if vendor_id:
+    if current_user.role == "vendor":
+        base_query = base_query.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+    elif vendor_id:
         base_query = base_query.filter(models.PurchaseOrder.vendor_id == models.Vendor.id).filter(models.Vendor.sellercloud_vendor_id == vendor_id)
     
     # 1. NEW ARRIVALS: Created in last 10 days without invoice
@@ -222,7 +226,10 @@ def list_purchase_orders(
     sort_by: Optional[str] = Query(None, description="Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     search: Optional[str] = Query(None, description="Search by PO number, order title, or vendor name"),
+    date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
+    date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     List purchase orders with filtering and sorting.
@@ -245,7 +252,10 @@ def list_purchase_orders(
     )
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
-    if vendor_id:
+    
+    if current_user.role == "vendor":
+        q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+    elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
         
     if search:
@@ -258,6 +268,11 @@ def list_purchase_orders(
             search_conditions.append(models.PurchaseOrder.sellercloud_po_id == int(search))
             
         q = q.filter(or_(*search_conditions))
+        
+    if date_from:
+        q = q.filter(models.PurchaseOrder.date_ordered >= date_from)
+    if date_to:
+        q = q.filter(models.PurchaseOrder.date_ordered <= date_to)
 
     # Apply sorting
     sort_field_map = {
@@ -364,6 +379,10 @@ async def add_po_comment(
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
         
+    if current_user.role == "vendor":
+        if str(po.vendor_id) != str(current_user.vendor_id):
+            raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
+            
     new_comment = models.PurchaseOrderComment(
         purchase_order_id=po.id,
         user_id=current_user.id,
@@ -390,6 +409,7 @@ async def add_po_comment(
         comment_text=new_comment.comment
     )
     
+    log_activity(db, action="ADD_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"comment_id": str(new_comment.id)})
     return new_comment
 
 @router.put("/comments/{comment_id}", response_model=POCommentOut)
@@ -429,6 +449,7 @@ async def update_po_comment(
         comment_text=comment.comment
     )
     
+    log_activity(db, action="UPDATE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": str(comment.id)})
     return comment
 
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
@@ -471,6 +492,7 @@ async def add_po_item_comment(
         comment_text=new_comment.comment
     )
     
+    log_activity(db, action="ADD_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id), details={"comment_id": str(new_comment.id)})
     return new_comment
 
 @router.put("/items/comments/{comment_id}", response_model=POItemCommentOut)
@@ -511,6 +533,7 @@ async def update_po_item_comment(
         comment_text=comment.comment
     )
     
+    log_activity(db, action="UPDATE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": str(comment.id)})
     return comment
 
 
@@ -521,6 +544,7 @@ def get_filtered_pos(
     filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items. If not provided, returns all 4 categories."),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Unified filter endpoint for purchase orders.
@@ -565,7 +589,9 @@ def get_filtered_pos(
         )
         
         # Apply vendor filter if provided
-        if vendor_id:
+        if current_user.role == "vendor":
+            base_q = base_q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+        elif vendor_id:
             base_q = base_q.filter(models.PurchaseOrder.vendor_id == vendor_id)
         
         # Helper function to create response object
@@ -656,7 +682,9 @@ def get_filtered_pos(
     )
     
     # Apply vendor filter if provided
-    if vendor_id:
+    if current_user.role == "vendor":
+        q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+    elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
     
     # Apply filter type
@@ -1181,11 +1209,68 @@ def get_overdue_containers(
     }
 
 
+@router.patch("/{po_id}/status", response_model=PurchaseOrderOut)
+def update_po_status(
+    po_id: str,
+    status_data: POStatusUpdate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Update the production or shipment status of a PO.
+    Vendors can only update POs assigned to their vendor_id.
+    """
+    po = None
+    try:
+        sc_po_id = int(po_id)
+        po = db.query(models.PurchaseOrder).options(joinedload(models.PurchaseOrder.vendor)).filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id).first()
+    except ValueError:
+        try:
+            po = db.query(models.PurchaseOrder).options(joinedload(models.PurchaseOrder.vendor)).filter(models.PurchaseOrder.id == po_id).first()
+        except Exception:
+            pass
+            
+    if not po:
+        raise HTTPException(status_code=404, detail=f"Purchase order '{po_id}' not found")
+        
+    if current_user.role == "vendor":
+        if str(po.vendor_id) != str(current_user.vendor_id):
+            raise HTTPException(status_code=403, detail="Not authorized to update this PO")
+            
+    changed = False
+    old_status = po.status
+    
+    if status_data.status is not None:
+        po.status = status_data.status
+        changed = True
+        
+    if changed:
+        db.commit()
+        db.refresh(po)
+        log_activity(db, action="UPDATE_PO_STATUS", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"status": po.status})
+        
+        # Send email notification if vendor made the change
+        if current_user.role == "vendor":
+            from app.services.email_service import send_po_status_update_email
+            vendor_name = po.vendor.name if po.vendor else "Unknown Vendor"
+            background_tasks.add_task(
+                send_po_status_update_email,
+                db=db,
+                po_number=str(po.sellercloud_po_id),
+                old_status=old_status,
+                new_status=po.status,
+                vendor_name=vendor_name
+            )
+            
+    return po
+
 @router.patch("/{po_id}/lead-time")
 def update_po_lead_time(
     po_id: str,
     container_lead_time_days: int = Query(..., description="Container lead time in days"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Update container lead time for a specific purchase order.
@@ -1197,6 +1282,9 @@ def update_po_lead_time(
     
     Example: 45 days means container arrives 45 days after invoice date.
     """
+    if current_user.role == "vendor":
+        raise HTTPException(status_code=403, detail="Vendors cannot update lead time")
+
     po = None
     # Try to parse as integer (sellercloud_po_id)
     try:
@@ -1215,6 +1303,8 @@ def update_po_lead_time(
     po.container_lead_time_days = container_lead_time_days
     db.commit()
     db.refresh(po)
+    
+    log_activity(db, action="UPDATE_PO_LEAD_TIME", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"lead_time": container_lead_time_days})
     
     return {
         "message": "Lead time updated successfully",
@@ -1364,7 +1454,6 @@ def trigger_all_containers_sync(
     days: int = Query(30, description="Sync containers for POs from last N days (default: 30)"),
     skip_with_containers: bool = Query(True, description="Skip POs that already have containers"),
     limit: Optional[int] = Query(None, description="Limit number of POs to sync (for testing)"),
-    max_duration: int = Query(50, description="Max seconds to run before returning (prevents Vercel timeout)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -1397,8 +1486,7 @@ def trigger_all_containers_sync(
     result = sync_service.sync_containers_bulk_optimized(
         days=days,
         skip_with_containers=skip_with_containers,
-        limit=limit,
-        max_duration_seconds=max_duration
+        limit=limit
     )
     
     if result.get("success"):
