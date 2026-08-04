@@ -1452,7 +1452,7 @@ def trigger_single_po_sync(
 @router.post("/sync-containers")
 def trigger_all_containers_sync(
     days: int = Query(30, description="Sync containers for POs from last N days (default: 30)"),
-    skip_with_containers: bool = Query(True, description="Skip POs that already have containers"),
+    skip_with_containers: bool = Query(False, description="Skip POs that already have containers (set to true to speed up, false to catch deletions)"),
     limit: Optional[int] = Query(None, description="Limit number of POs to sync (for testing)"),
     db: Session = Depends(get_db)
 ):
