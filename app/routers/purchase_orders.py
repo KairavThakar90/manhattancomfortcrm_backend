@@ -268,7 +268,7 @@ def list_purchase_orders(
         )
         
     if search:
-        search_term = f"{search}%"
+        search_term = f"%{search}%"
         search_conditions = [
             models.PurchaseOrder.purchase_title.ilike(search_term),
             models.PurchaseOrder.vendor.has(models.Vendor.name.ilike(search_term))

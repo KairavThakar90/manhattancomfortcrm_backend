@@ -75,7 +75,7 @@ def list_containers(
     # Container name or ID search
     if search:
         from sqlalchemy import or_, case, cast, String
-        search_term = f"{search}%"
+        search_term = f"%{search}%"
         search_conditions = [
             models.ShippingContainer.container_name.ilike(search_term)
         ]
