@@ -550,7 +550,8 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                                 .first()
                             )
 
-                    warehouse_sc_id = details_section.get("ReceiveWarehouseID")
+                    # Sellercloud sometimes returns ReceivingWarehouseID and sometimes ReceiveWarehouseID
+                    warehouse_sc_id = details_section.get("ReceivingWarehouseID") or details_section.get("ReceiveWarehouseID")
                     warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
 
                     estimated_arrival_date = None

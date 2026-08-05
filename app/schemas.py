@@ -535,6 +535,12 @@ class ValidateContainerRowRequest(BaseModel):
 class ValidateContainerBulkRequest(BaseModel):
     items: List[ValidateContainerRowRequest]
 
+class UserActivityLogCreate(BaseModel):
+    action: str = Field(..., description="Action name, e.g., VIEW_PO, CLICK_BUTTON")
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
 class UserActivityLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

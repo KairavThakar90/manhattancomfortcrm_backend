@@ -6,7 +6,7 @@ import io
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, cast, String
 
 from app.database import get_db
 from app.auth import get_current_user
@@ -259,13 +259,13 @@ def list_purchase_orders(
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
         
     if search:
-        search_term = f"%{search}%"
+        search_term = f"{search}%"
         search_conditions = [
             models.PurchaseOrder.purchase_title.ilike(search_term),
             models.PurchaseOrder.vendor.has(models.Vendor.name.ilike(search_term))
         ]
         if search.isdigit():
-            search_conditions.append(models.PurchaseOrder.sellercloud_po_id == int(search))
+            search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).ilike(search_term))
             
         q = q.filter(or_(*search_conditions))
         

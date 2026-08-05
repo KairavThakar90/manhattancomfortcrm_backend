@@ -72,12 +72,13 @@ def list_containers(
 
     # Container name or ID search
     if search:
-        from sqlalchemy import or_, case
+        from sqlalchemy import or_, case, cast, String
+        search_term = f"{search}%"
         search_conditions = [
-            models.ShippingContainer.container_name.ilike(f"%{search}%")
+            models.ShippingContainer.container_name.ilike(search_term)
         ]
         if search.isdigit():
-            search_conditions.append(models.ShippingContainer.sellercloud_container_id == int(search))
+            search_conditions.append(cast(models.ShippingContainer.sellercloud_container_id, String).ilike(search_term))
             order_clauses.append(case((models.ShippingContainer.sellercloud_container_id == int(search), 0), else_=1))
             
         query = query.filter(or_(*search_conditions))
@@ -381,10 +382,10 @@ def create_container(
             if container_data.estimated_arrival_date
             else None
         ),
-        "ShippingStatus": 1,  # 1 = NotArrived (default for newly created containers)
+        "ShippingStatus": 2 if container_data.received_date else 1,
     }
     if container_data.received_date:
-        sc_container_payload["ShippedOn"] = container_data.received_date.isoformat()
+        sc_container_payload["ReceivedDate"] = container_data.received_date.isoformat()
         
     if container_data.warehouse_id:
         import uuid
@@ -549,11 +550,12 @@ def update_container(
     if container.sellercloud_container_id:
         try:
             sc_client = SellerCloudClient()
+            final_received_date = update_data.received_date if update_data.received_date is not None else container.received_date
             sc_payload = {
                 "ContainerName": update_data.container_name or container.container_name,
                 "EstimatedArrivalDate": update_data.estimated_arrival_date.isoformat() if update_data.estimated_arrival_date else (container.estimated_arrival_date.isoformat() if container.estimated_arrival_date else None),
-                "ReceivedDate": update_data.received_date.isoformat() if update_data.received_date else (container.received_date.isoformat() if container.received_date else None),
-                "ShippingStatus": 1 if not update_data.received_date else 2, # Example: 1=NotArrived, 2=Arrived
+                "ReceivedDate": final_received_date.isoformat() if final_received_date else None,
+                "ShippingStatus": 2 if final_received_date else 1,
             }
             sc_client.update_shipping_container(container.sellercloud_container_id, sc_payload)
         except Exception as exc:
@@ -1071,10 +1073,10 @@ def debug_sc_create(
     sc_payload = {
         "ContainerName": container_data.container_name,
         "EstimatedArrivalDate": container_data.estimated_arrival_date.isoformat() if container_data.estimated_arrival_date else None,
-        "ShippingStatus": 1,
+        "ShippingStatus": 2 if container_data.received_date else 1,
     }
     if container_data.received_date:
-        sc_payload["ShippedOn"] = container_data.received_date.isoformat()
+        sc_payload["ReceivedDate"] = container_data.received_date.isoformat()
 
     # Build the add-items payload for display (not called since this is debug-only)
     sc_add_items_payload = {"Items": sc_items_payload}
