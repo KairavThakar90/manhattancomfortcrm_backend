@@ -356,6 +356,10 @@ class POItemCommentOut(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+class POContainerDetailOut(BaseModel):
+    id: uuid.UUID
+    sellercloud_container_id: Optional[int] = None
+
 class WarehouseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
@@ -413,6 +417,7 @@ class PurchaseOrderOut(BaseModel):
     
     # Container information
     container_names: List[str] = []  # All unique container names for this PO
+    container_details: List[POContainerDetailOut] = []  # Detailed container info
     
     # Status flags
     is_invoice_delayed: Optional[str] = None  # "Yes" or "No"
@@ -450,11 +455,18 @@ class PurchaseOrderOut(BaseModel):
             
             # Collect unique container names from all items
             container_names_set = set()
+            container_details_map = {}
             for item in instance.items:
                 for container in item.containers:
                     if container.container_name:
                         container_names_set.add(container.container_name)
+                        if str(container.id) not in container_details_map:
+                            container_details_map[str(container.id)] = {
+                                "id": container.id,
+                                "sellercloud_container_id": container.sellercloud_container_id
+                            }
             instance.container_names = sorted(list(container_names_set))
+            instance.container_details = [POContainerDetailOut(**detail) for detail in container_details_map.values()]
         else:
             instance.total_item_count = 0
         

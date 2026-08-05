@@ -826,7 +826,7 @@ def sync_container_from_sellercloud(
                 received_raw.replace("Z", "+00:00")
             )
 
-        warehouse_sc_id = sc.get("ReceiveWarehouseID")
+        warehouse_sc_id = sc.get("ReceivingWarehouseID") or sc.get("ReceiveWarehouseID")
         warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
         if warehouse:
             container.warehouse_id = warehouse.id
