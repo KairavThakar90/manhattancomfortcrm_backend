@@ -298,7 +298,7 @@ class PurchaseOrderItemOut(BaseModel):
         instance = super().model_validate(obj, **kwargs)
         
         # Calculate remaining quantity
-        instance.qty_remaining = instance.qty_ordered - instance.qty_received
+        instance.qty_remaining = max(0, instance.qty_ordered - max(instance.qty_received, instance.qty_in_container))
         
         # Load containers from the link table
         if hasattr(obj, 'container_links') and obj.container_links:

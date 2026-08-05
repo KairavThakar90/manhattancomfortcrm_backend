@@ -68,43 +68,34 @@ def list_containers(
     elif received is False:
         query = query.filter(models.ShippingContainer.received_date.is_(None))
 
+    order_clauses = []
+
     # Container name or ID search
     if search:
-        from sqlalchemy import or_
+        from sqlalchemy import or_, case
         search_conditions = [
             models.ShippingContainer.container_name.ilike(f"%{search}%")
         ]
         if search.isdigit():
             search_conditions.append(models.ShippingContainer.sellercloud_container_id == int(search))
+            order_clauses.append(case((models.ShippingContainer.sellercloud_container_id == int(search), 0), else_=1))
             
         query = query.filter(or_(*search_conditions))
 
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:
-        query = (
-            query.join(
-                models.PurchaseOrderItemContainer,
-                models.ShippingContainer.id
-                == models.PurchaseOrderItemContainer.shipping_container_id,
-            )
-            .join(
-                models.PurchaseOrderItem,
-                models.PurchaseOrderItemContainer.purchase_order_item_id
-                == models.PurchaseOrderItem.id,
-            )
-            .join(
-                models.PurchaseOrder,
-                models.PurchaseOrderItem.purchase_order_id == models.PurchaseOrder.id,
-            )
-        )
+        po_query = db.query(models.PurchaseOrderItemContainer.shipping_container_id) \
+            .join(models.PurchaseOrderItem, models.PurchaseOrderItemContainer.purchase_order_item_id == models.PurchaseOrderItem.id) \
+            .join(models.PurchaseOrder, models.PurchaseOrderItem.purchase_order_id == models.PurchaseOrder.id)
+            
         if po_id:
-            query = query.filter(models.PurchaseOrder.id == po_id)
+            po_query = po_query.filter(models.PurchaseOrder.id == po_id)
         if sellercloud_po_id:
-            query = query.filter(
-                models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id
-            )
+            po_query = po_query.filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id)
         if vendor_id:
-            query = query.filter(models.PurchaseOrder.vendor_id == vendor_id)
+            po_query = po_query.filter(models.PurchaseOrder.vendor_id == vendor_id)
+            
+        query = query.filter(models.ShippingContainer.id.in_(po_query))
 
     # Filter by received date range
     if date_from:
@@ -115,12 +106,10 @@ def list_containers(
             from datetime import time
             date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
         query = query.filter(models.ShippingContainer.received_date <= date_to)
-        
-    query = query.distinct()
 
     total = query.count()
     containers = (
-        query.order_by(models.ShippingContainer.created_at.desc())
+        query.order_by(*order_clauses, models.ShippingContainer.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
