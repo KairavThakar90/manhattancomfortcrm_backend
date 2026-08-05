@@ -75,12 +75,13 @@ def list_containers(
     # Container name or ID search
     if search:
         from sqlalchemy import or_, case, cast, String
-        search_term = f"%{search}%"
+        import re
+        escaped_search = re.escape(search)
         search_conditions = [
-            models.ShippingContainer.container_name.ilike(search_term)
+            models.ShippingContainer.container_name.op('~*')(rf"\y{escaped_search}")
         ]
         if search.isdigit():
-            search_conditions.append(cast(models.ShippingContainer.sellercloud_container_id, String).ilike(search_term))
+            search_conditions.append(cast(models.ShippingContainer.sellercloud_container_id, String).op('~*')(rf"\y{escaped_search}"))
             order_clauses.append(case((models.ShippingContainer.sellercloud_container_id == int(search), 0), else_=1))
             
         query = query.filter(or_(*search_conditions))

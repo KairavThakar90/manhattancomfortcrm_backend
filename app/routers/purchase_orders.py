@@ -268,13 +268,14 @@ def list_purchase_orders(
         )
         
     if search:
-        search_term = f"%{search}%"
+        import re
+        escaped_search = re.escape(search)
         search_conditions = [
-            models.PurchaseOrder.purchase_title.ilike(search_term),
-            models.PurchaseOrder.vendor.has(models.Vendor.name.ilike(search_term))
+            models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
+            models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}"))
         ]
         if search.isdigit():
-            search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).ilike(search_term))
+            search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
             
         q = q.filter(or_(*search_conditions))
         
