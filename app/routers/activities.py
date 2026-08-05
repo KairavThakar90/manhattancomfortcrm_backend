@@ -54,3 +54,24 @@ def get_activities(
         "size": size,
         "pages": total_pages
     }
+
+@router.post("", response_model=dict)
+def create_activity(
+    activity: schemas.UserActivityLogCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Log a custom user activity from the frontend (e.g. clicking a button, viewing a page).
+    """
+    from app.services.activity_service import log_activity
+    log_activity(
+        db=db,
+        action=activity.action,
+        user_id=current_user.id,
+        entity_type=activity.entity_type,
+        entity_id=activity.entity_id,
+        details=activity.details
+    )
+    return {"status": "success", "message": "Activity logged"}
+

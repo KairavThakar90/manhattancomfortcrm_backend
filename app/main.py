@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
 from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses, activities
+from app.middleware.activity_logger import ActivityLoggingMiddleware
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
 
@@ -60,6 +61,8 @@ app.add_middleware(
     allow_headers=["*"],
     allow_origin_regex=r"https://manhattancomfortcrm.*\.vercel\.app",  # Allow all Vercel preview deployments
 )
+
+app.add_middleware(ActivityLoggingMiddleware)
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(companies.router, prefix="/api/v1")

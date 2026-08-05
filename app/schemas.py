@@ -298,7 +298,7 @@ class PurchaseOrderItemOut(BaseModel):
         instance = super().model_validate(obj, **kwargs)
         
         # Calculate remaining quantity
-        instance.qty_remaining = instance.qty_ordered - instance.qty_received
+        instance.qty_remaining = max(0, instance.qty_ordered - max(instance.qty_received, instance.qty_in_container))
         
         # Load containers from the link table
         if hasattr(obj, 'container_links') and obj.container_links:
@@ -360,6 +360,10 @@ class POItemCommentOut(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+class POContainerDetailOut(BaseModel):
+    id: uuid.UUID
+    sellercloud_container_id: Optional[int] = None
+
 class WarehouseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
@@ -417,6 +421,7 @@ class PurchaseOrderOut(BaseModel):
     
     # Container information
     container_names: List[str] = []  # All unique container names for this PO
+    container_details: List[POContainerDetailOut] = []  # Detailed container info
     
     # Status flags
     is_invoice_delayed: Optional[str] = None  # "Yes" or "No"
@@ -454,11 +459,18 @@ class PurchaseOrderOut(BaseModel):
             
             # Collect unique container names from all items
             container_names_set = set()
+            container_details_map = {}
             for item in instance.items:
                 for container in item.containers:
                     if container.container_name:
                         container_names_set.add(container.container_name)
+                        if str(container.id) not in container_details_map:
+                            container_details_map[str(container.id)] = {
+                                "id": container.id,
+                                "sellercloud_container_id": container.sellercloud_container_id
+                            }
             instance.container_names = sorted(list(container_names_set))
+            instance.container_details = [POContainerDetailOut(**detail) for detail in container_details_map.values()]
         else:
             instance.total_item_count = 0
         
@@ -538,6 +550,12 @@ class ValidateContainerRowRequest(BaseModel):
 
 class ValidateContainerBulkRequest(BaseModel):
     items: List[ValidateContainerRowRequest]
+
+class UserActivityLogCreate(BaseModel):
+    action: str = Field(..., description="Action name, e.g., VIEW_PO, CLICK_BUTTON")
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
 
 class UserActivityLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
