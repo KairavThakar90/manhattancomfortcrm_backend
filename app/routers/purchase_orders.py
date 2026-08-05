@@ -283,6 +283,10 @@ def list_purchase_orders(
     if date_from:
         q = q.filter(models.PurchaseOrder.date_ordered >= date_from)
     if date_to:
+        # If date_to has no time component (midnight), extend it to the end of the day
+        if date_to.time() == datetime.min.time():
+            from datetime import time
+            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
         q = q.filter(models.PurchaseOrder.date_ordered <= date_to)
 
     # Apply sorting
@@ -1469,7 +1473,7 @@ def trigger_single_po_sync(
 @router.post("/sync-containers")
 def trigger_all_containers_sync(
     days: int = Query(30, description="Sync containers for POs from last N days (default: 30)"),
-    skip_with_containers: bool = Query(True, description="Skip POs that already have containers"),
+    skip_with_containers: bool = Query(False, description="Skip POs that already have containers (set to true to speed up, false to catch deletions)"),
     limit: Optional[int] = Query(None, description="Limit number of POs to sync (for testing)"),
     db: Session = Depends(get_db)
 ):

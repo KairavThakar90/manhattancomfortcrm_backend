@@ -68,11 +68,16 @@ def list_containers(
     elif received is False:
         query = query.filter(models.ShippingContainer.received_date.is_(None))
 
-    # Container name search
+    # Container name or ID search
     if search:
-        query = query.filter(
+        from sqlalchemy import or_
+        search_conditions = [
             models.ShippingContainer.container_name.ilike(f"%{search}%")
-        )
+        ]
+        if search.isdigit():
+            search_conditions.append(models.ShippingContainer.sellercloud_container_id == int(search))
+            
+        query = query.filter(or_(*search_conditions))
 
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:
@@ -105,8 +110,13 @@ def list_containers(
     if date_from:
         query = query.filter(models.ShippingContainer.received_date >= date_from)
     if date_to:
+        # If date_to has no time component (midnight), extend it to the end of the day
+        if date_to.time() == datetime.min.time():
+            from datetime import time
+            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
         query = query.filter(models.ShippingContainer.received_date <= date_to)
-        query = query.distinct()
+        
+    query = query.distinct()
 
     total = query.count()
     containers = (
@@ -234,7 +244,7 @@ def get_po_items_for_container(
                 product_name=item.product_name,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
-                qty_remaining=max(0, item.qty_ordered - item.qty_received),
+                qty_remaining=qty_available,
                 qty_already_in_containers=qty_already,
                 qty_available_for_container=qty_available,
                 existing_containers=existing_containers,
@@ -1576,6 +1586,7 @@ def validate_container_items_bulk(
                 "product_name": po_item.product_name,
                 "qty_ordered": po_item.qty_ordered,
                 "qty_received": po_item.qty_received,
+                "remaining_qty": max(0, po_item.qty_ordered - (po_item.qty_received or 0)),
                 "qty_already_in_containers": qty_already,
                 "qty_available_for_container": qty_available
             }
