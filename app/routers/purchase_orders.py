@@ -70,6 +70,7 @@ def get_all_filter_categories(
     # Base query
     base_query = db.query(models.PurchaseOrder).options(
         joinedload(models.PurchaseOrder.vendor),
+        joinedload(models.PurchaseOrder.company),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
         joinedload(models.PurchaseOrder.items)
@@ -249,6 +250,7 @@ def list_purchase_orders(
     q = db.query(models.PurchaseOrder).options(
         joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
         joinedload(models.PurchaseOrder.vendor),
+        joinedload(models.PurchaseOrder.company),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
@@ -352,8 +354,9 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.company),
             joinedload(models.PurchaseOrder.comments),
-            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments).joinedload(models.PurchaseOrderItemComment.user),
             joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user)
         )
         .filter(filter_clause)
@@ -366,6 +369,12 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
     for comment in po.comments:
         if comment.user:
             comment.user_name = comment.user.full_name or comment.user.email
+            
+    # Map user_name for item comments
+    for item in po.items:
+        for comment in item.comments:
+            if comment.user:
+                comment.user_name = comment.user.full_name or comment.user.email
             
     return PurchaseOrderOut.model_validate(po)
 
@@ -597,6 +606,7 @@ def get_filtered_pos(
             .options(
                 joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
                 joinedload(models.PurchaseOrder.vendor),
+                joinedload(models.PurchaseOrder.company),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
             )
@@ -690,6 +700,7 @@ def get_filtered_pos(
         .options(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.company),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
