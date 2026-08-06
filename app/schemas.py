@@ -66,6 +66,14 @@ class CompanyOut(BaseModel):
     updated_at: datetime
 
 
+class CompanySummary(BaseModel):
+    """Company summary for nested responses"""
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sellercloud_company_id: Optional[int] = None
+    name: str
+
+
 # ---------- Vendor ----------
 class VendorOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -394,6 +402,7 @@ class PurchaseOrderOut(BaseModel):
     total_amount: Optional[float] = None
     currency: str
     company_id: Optional[uuid.UUID] = None
+    company: Optional[CompanySummary] = None
     vendor_id: Optional[uuid.UUID] = None
     vendor: Optional[VendorSummary] = None  # Nested vendor information
     status: Optional[str] = None
