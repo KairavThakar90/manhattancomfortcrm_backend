@@ -475,6 +475,27 @@ async def update_po_comment(
     log_activity(db, action="UPDATE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": str(comment.id)})
     return comment
 
+@router.get("/items/{item_id}/comments", response_model=list[POItemCommentOut])
+def get_po_item_comments(
+    item_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+ 
+    comments = (
+        db.query(models.PurchaseOrderItemComment)
+        .options(joinedload(models.PurchaseOrderItemComment.user))
+        .filter(models.PurchaseOrderItemComment.purchase_order_item_id == item.id)
+        .order_by(models.PurchaseOrderItemComment.created_at.asc())
+        .all()
+    )
+    for comment in comments:
+        comment.user_name = comment.user.full_name or comment.user.email if comment.user else None
+    return comments
+
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
 async def add_po_item_comment(
     item_id: str,
