@@ -111,6 +111,7 @@ class Warehouse(Base):
     is_default = Column(Boolean, default=False)
     warehouse_type = Column(String(50))
     is_sellable = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)

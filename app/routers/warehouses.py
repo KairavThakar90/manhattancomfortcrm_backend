@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app import schemas, models
 from app.database import get_db
@@ -14,9 +14,15 @@ router = APIRouter(
 )
 
 @router.get("/", response_model=List[schemas.WarehouseOut])
-def list_warehouses(db: Session = Depends(get_db)):
+def list_warehouses(
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    db: Session = Depends(get_db)
+):
     """List all warehouses stored in the database."""
-    warehouses = db.query(models.Warehouse).order_by(models.Warehouse.name).all()
+    q = db.query(models.Warehouse)
+    if is_active is not None:
+        q = q.filter(models.Warehouse.is_active == is_active)
+    warehouses = q.order_by(models.Warehouse.name).all()
     return warehouses
 
 @router.post("/sync")

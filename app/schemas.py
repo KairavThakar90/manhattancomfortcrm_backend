@@ -122,6 +122,7 @@ class WarehouseOut(BaseModel):
     is_default: Optional[bool] = None
     warehouse_type: Optional[str] = None
     is_sellable: Optional[bool] = None
+    is_active: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -376,6 +377,7 @@ class WarehouseOut(BaseModel):
     is_default: Optional[bool] = None
     warehouse_type: Optional[str] = None
     is_sellable: Optional[bool] = None
+    is_active: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -505,6 +507,13 @@ class PurchaseOrderOut(BaseModel):
             instance.is_container_overdue = "Yes" if expected_arrival < today else "No"
         else:
             instance.is_container_overdue = "No"  # No invoice or no lead time set
+            
+        # 3. Dynamic status calculation based on received quantities
+        if getattr(instance, 'total_qty_ordered', 0) > 0:
+            if getattr(instance, 'total_qty_received', 0) >= instance.total_qty_ordered:
+                instance.status = "SHIPPED"
+            elif getattr(instance, 'total_qty_received', 0) > 0:
+                instance.status = "PARTIALLY_SHIPPED"
         
         return instance
 
