@@ -14,15 +14,10 @@ router = APIRouter(
 )
 
 @router.get("/", response_model=List[schemas.WarehouseOut])
-def list_warehouses(
-    is_active: Optional[bool] = Query(None, description="Filter by active status"),
-    db: Session = Depends(get_db)
-):
-    """List all warehouses stored in the database."""
-    q = db.query(models.Warehouse)
-    if is_active is not None:
-        q = q.filter(models.Warehouse.is_active == is_active)
-    warehouses = q.order_by(models.Warehouse.name).all()
+def list_warehouses(db: Session = Depends(get_db)):
+    """List all active warehouses stored in the database."""
+    # Hardcoded to only return active warehouses
+    warehouses = db.query(models.Warehouse).filter(models.Warehouse.is_active == True).order_by(models.Warehouse.name).all()
     return warehouses
 
 @router.post("/sync")
