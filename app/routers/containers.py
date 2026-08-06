@@ -38,6 +38,7 @@ def list_containers(
     po_id: Optional[str] = Query(None, description="Filter by Purchase Order UUID"),
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
+    sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
     date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
     db: Session = Depends(get_db),
@@ -52,6 +53,7 @@ def list_containers(
     - `po_id` — containers linked to a specific PO (local UUID)
     - `sellercloud_po_id` — containers linked to a specific PO (SC integer ID)
     - `vendor_id` — containers linked to POs from a specific vendor
+    - `sellercloud_warehouse_id` — containers stored in a specific warehouse (SC integer ID)
 
     Each result includes:
     - `is_received` — boolean derived from received_date
@@ -73,15 +75,22 @@ def list_containers(
     # Container name or ID search
     if search:
         from sqlalchemy import or_, case, cast, String
-        search_term = f"{search}%"
+        import re
+        escaped_search = re.escape(search)
         search_conditions = [
-            models.ShippingContainer.container_name.ilike(search_term)
+            models.ShippingContainer.container_name.op('~*')(rf"\y{escaped_search}")
         ]
         if search.isdigit():
-            search_conditions.append(cast(models.ShippingContainer.sellercloud_container_id, String).ilike(search_term))
+            search_conditions.append(cast(models.ShippingContainer.sellercloud_container_id, String).op('~*')(rf"\y{escaped_search}"))
             order_clauses.append(case((models.ShippingContainer.sellercloud_container_id == int(search), 0), else_=1))
             
         query = query.filter(or_(*search_conditions))
+
+    # Filter by Warehouse
+    if sellercloud_warehouse_id:
+        query = query.join(models.Warehouse, models.ShippingContainer.warehouse_id == models.Warehouse.id).filter(
+            models.Warehouse.sellercloud_warehouse_id == sellercloud_warehouse_id
+        )
 
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:

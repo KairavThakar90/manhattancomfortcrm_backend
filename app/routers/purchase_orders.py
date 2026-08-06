@@ -234,6 +234,8 @@ def list_purchase_orders(
     page_size: Optional[int] = Query(None, ge=1, description="Items per page. Leave empty for all."),
     status_code: Optional[int] = Query(None, description="Raw SellerCloud PurchaseOrderStatus code"),
     vendor_id: Optional[str] = None,
+    company_id: Optional[str] = Query(None, description="Filter by local Company UUID"),
+    sellercloud_company_id: Optional[int] = Query(None, description="Filter by SellerCloud Company integer ID"),
     sort_by: Optional[str] = Query(None, description="Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     search: Optional[str] = Query(None, description="Search by PO number, order title, or vendor name"),
@@ -269,14 +271,22 @@ def list_purchase_orders(
     elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
         
+    if company_id:
+        q = q.filter(models.PurchaseOrder.company_id == company_id)
+    if sellercloud_company_id:
+        q = q.join(models.Company, models.PurchaseOrder.company_id == models.Company.id).filter(
+            models.Company.sellercloud_company_id == sellercloud_company_id
+        )
+        
     if search:
-        search_term = f"{search}%"
+        import re
+        escaped_search = re.escape(search)
         search_conditions = [
-            models.PurchaseOrder.purchase_title.ilike(search_term),
-            models.PurchaseOrder.vendor.has(models.Vendor.name.ilike(search_term))
+            models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
+            models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}"))
         ]
         if search.isdigit():
-            search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).ilike(search_term))
+            search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
             
         q = q.filter(or_(*search_conditions))
         
