@@ -18,6 +18,21 @@ from app.schemas import (
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
 
+import uuid
+
+def resolve_container_filter(container_id: str):
+    """
+    Helper to allow fetching a container by either its local UUID or its SellerCloud integer ID.
+    Returns the SQLAlchemy filter condition.
+    """
+    try:
+        container_uuid = uuid.UUID(container_id)
+        return models.ShippingContainer.id == container_uuid
+    except ValueError:
+        if container_id.isdigit():
+            return models.ShippingContainer.sellercloud_container_id == int(container_id)
+        raise HTTPException(status_code=400, detail="Invalid container ID format (must be UUID or SellerCloud integer ID)")
+
 router = APIRouter(
     prefix="/containers",
     tags=["Containers"],
@@ -573,7 +588,7 @@ def update_container(
     Update a container's name, estimated arrival date, or received date.
     Syncs the update to SellerCloud and saves it locally.
     """
-    container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == container_id).first()
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
     if not container:
         raise HTTPException(status_code=404, detail="Container not found")
 
@@ -646,7 +661,7 @@ def add_items_to_container(
     """
     Add items to an existing container. Syncs to SellerCloud and saves locally.
     """
-    container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == container_id).first()
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
     if not container:
         raise HTTPException(status_code=404, detail="Container not found")
 
@@ -754,7 +769,7 @@ def get_container_details(
     """
     container = (
         db.query(models.ShippingContainer)
-        .filter(models.ShippingContainer.id == container_id)
+        .filter(resolve_container_filter(container_id))
         .options(
             joinedload(models.ShippingContainer.item_links)
             .joinedload(models.PurchaseOrderItemContainer.item)
@@ -846,7 +861,7 @@ def sync_container_from_sellercloud(
     """
     container = (
         db.query(models.ShippingContainer)
-        .filter(models.ShippingContainer.id == container_id)
+        .filter(resolve_container_filter(container_id))
         .first()
     )
     if not container:

@@ -213,6 +213,10 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
         full_name=full_name,
         role=user_data.role,
         vendor_id=user_data.vendor_id if user_data.role == "vendor" else None,
+        country=user_data.country if user_data.role == "vendor" else None,
+        phone=user_data.phone if user_data.role == "vendor" else None,
+        payment_terms=user_data.payment_terms if user_data.role == "vendor" else None,
+        container_lead_time_days=user_data.lead_time if user_data.role == "vendor" else None,
         is_active=True
     )
     

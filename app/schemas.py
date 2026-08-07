@@ -35,6 +35,10 @@ class UserOut(BaseModel):
     last_name: Optional[str] = None
     full_name: Optional[str] = None
     role: str
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    payment_terms: Optional[str] = None
+    container_lead_time_days: Optional[int] = None
 
 
 class Token(BaseModel):

@@ -21,6 +21,13 @@ class User(Base):
     full_name = Column(String(255))
     role = Column(String(50), default="user", nullable=False)
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True)
+    
+    # Registration info (mirrored from Vendor for clarity on per-user level)
+    country = Column(String(120), nullable=True)
+    phone = Column(String(50), nullable=True)
+    payment_terms = Column(String(255), nullable=True)
+    container_lead_time_days = Column(Integer, nullable=True)
+    
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
