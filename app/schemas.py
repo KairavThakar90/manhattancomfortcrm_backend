@@ -582,10 +582,12 @@ class PurchaseOrderOut(BaseModel):
             instance.is_container_overdue = "No"  # No invoice or no lead time set
             
         # 3. Dynamic status calculation based on received quantities
-        if getattr(instance, 'total_qty_ordered', 0) > 0:
-            if getattr(instance, 'total_qty_received', 0) >= instance.total_qty_ordered:
+        qty_ord = instance.total_qty_ordered or 0
+        qty_rec = instance.total_qty_received or 0
+        if qty_ord > 0:
+            if qty_rec >= qty_ord:
                 instance.status = "SHIPPED"
-            elif getattr(instance, 'total_qty_received', 0) > 0:
+            elif qty_rec > 0:
                 instance.status = "PARTIALLY_SHIPPED"
         
         return instance
