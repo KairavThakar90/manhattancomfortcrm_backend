@@ -21,6 +21,13 @@ class User(Base):
     full_name = Column(String(255))
     role = Column(String(50), default="user", nullable=False)
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True)
+    
+    # Registration info (mirrored from Vendor for clarity on per-user level)
+    country = Column(String(120), nullable=True)
+    phone = Column(String(50), nullable=True)
+    payment_terms = Column(String(255), nullable=True)
+    container_lead_time_days = Column(Integer, nullable=True)
+    
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -66,6 +73,7 @@ class Vendor(Base):
     state = Column(String(120))
     postal_code = Column(String(20))
     country = Column(String(120))
+    payment_terms = Column(String(255))
     is_active = Column(Boolean, default=True)
     container_lead_time_days = Column(Integer)  # days from payment/order to first container arrival, set per vendor
     raw_json = deferred(Column(JSONB))
@@ -111,6 +119,7 @@ class Warehouse(Base):
     is_default = Column(Boolean, default=False)
     warehouse_type = Column(String(50))
     is_sellable = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -221,6 +230,20 @@ class ShippingContainer(Base):
     estimated_arrival_date = Column(DateTime(timezone=True))  # ETA from SellerCloud
     received_date = Column(DateTime(timezone=True))  # Actual received date from SellerCloud
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))
+    
+    # Lifecycle Management Fields
+    date_dropped_off = Column(DateTime(timezone=True))
+    door = Column(String(50))
+    date_emptied = Column(DateTime(timezone=True))
+    unloaded_by = Column(String(255))
+    unload_cost = Column(Numeric(14, 2))
+    container_cost_drayage = Column(Numeric(14, 2))
+    customs_duty_misc = Column(Numeric(14, 2))
+    per_diem = Column(Numeric(14, 2))
+    country_of_origin = Column(String(120))
+    receiving_closure_notes = Column(Text)
+    factory_credit_needed = Column(Text)
+
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
