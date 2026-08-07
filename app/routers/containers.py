@@ -20,6 +20,11 @@ from app.services.activity_service import log_activity
 
 import uuid
 
+
+def format_sc_date(dt):
+    if not dt: return None
+    return dt.strftime("%Y-%m-%dT12:00:00Z")
+
 def resolve_container_filter(container_id: str):
     """
     Helper to allow fetching a container by either its local UUID or its SellerCloud integer ID.
@@ -412,15 +417,11 @@ def create_container(
     # Items are added in a SECOND call after the container is created
     sc_container_payload = {
         "ContainerName": container_data.container_name,
-        "EstimatedArrivalDate": (
-            container_data.estimated_arrival_date.isoformat()
-            if container_data.estimated_arrival_date
-            else None
-        ),
+        "EstimatedArrivalDate": format_sc_date(container_data.estimated_arrival_date),
         "ShippingStatus": 2 if container_data.received_date else 1,
     }
     if container_data.received_date:
-        sc_container_payload["ReceivedDate"] = container_data.received_date.isoformat()
+        sc_container_payload["ReceivedDate"] = format_sc_date(container_data.received_date)
         
     if container_data.warehouse_id:
         import uuid
@@ -599,8 +600,8 @@ def update_container(
             final_received_date = update_data.received_date if update_data.received_date is not None else container.received_date
             sc_payload = {
                 "ContainerName": update_data.container_name or container.container_name,
-                "EstimatedArrivalDate": update_data.estimated_arrival_date.isoformat() if update_data.estimated_arrival_date else (container.estimated_arrival_date.isoformat() if container.estimated_arrival_date else None),
-                "ReceivedDate": final_received_date.isoformat() if final_received_date else None,
+                "EstimatedArrivalDate": format_sc_date(update_data.estimated_arrival_date if update_data.estimated_arrival_date else container.estimated_arrival_date),
+                "ReceivedDate": format_sc_date(final_received_date),
                 "ShippingStatus": 2 if final_received_date else 1,
             }
             sc_client.update_shipping_container(container.sellercloud_container_id, sc_payload)
