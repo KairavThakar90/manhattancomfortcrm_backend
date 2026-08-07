@@ -148,6 +148,17 @@ def list_containers(
                 warehouse=ctr.warehouse,
                 created_at=ctr.created_at,
                 updated_at=ctr.updated_at,
+                date_dropped_off=ctr.date_dropped_off,
+                door=ctr.door,
+                date_emptied=ctr.date_emptied,
+                unloaded_by=ctr.unloaded_by,
+                unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
+                container_cost_drayage=float(ctr.container_cost_drayage) if ctr.container_cost_drayage is not None else None,
+                customs_duty_misc=float(ctr.customs_duty_misc) if ctr.customs_duty_misc is not None else None,
+                per_diem=float(ctr.per_diem) if ctr.per_diem is not None else None,
+                country_of_origin=ctr.country_of_origin,
+                receiving_closure_notes=ctr.receiving_closure_notes,
+                factory_credit_needed=ctr.factory_credit_needed,
                 total_items=total_items,
                 total_qty_in_container=total_qty,
                 total_qty_received=total_received,
@@ -473,6 +484,17 @@ def create_container(
         received_date=container_data.received_date,
         sellercloud_container_id=sellercloud_container_id,
         warehouse_id=container_data.warehouse_id,
+        date_dropped_off=container_data.date_dropped_off,
+        door=container_data.door,
+        date_emptied=container_data.date_emptied,
+        unloaded_by=container_data.unloaded_by,
+        unload_cost=container_data.unload_cost,
+        container_cost_drayage=container_data.container_cost_drayage,
+        customs_duty_misc=container_data.customs_duty_misc,
+        per_diem=container_data.per_diem,
+        country_of_origin=container_data.country_of_origin,
+        receiving_closure_notes=container_data.receiving_closure_notes,
+        factory_credit_needed=container_data.factory_credit_needed,
         raw_json=sc_response if isinstance(sc_response, dict) else {"error": sc_sync_error},
     )
     db.add(new_container)
@@ -579,6 +601,18 @@ def update_container(
         container.estimated_arrival_date = update_data.estimated_arrival_date
     if update_data.received_date is not None:
         container.received_date = update_data.received_date
+
+    # Update lifecycle fields dynamically if they are passed in the request
+    update_dict = update_data.model_dump(exclude_unset=True)
+    lifecycle_fields = [
+        "date_dropped_off", "door", "date_emptied", "unloaded_by", 
+        "unload_cost", "container_cost_drayage", "customs_duty_misc", 
+        "per_diem", "country_of_origin", "receiving_closure_notes", 
+        "factory_credit_needed"
+    ]
+    for field in lifecycle_fields:
+        if field in update_dict:
+            setattr(container, field, update_dict[field])
 
     container.updated_at = datetime.utcnow()
     db.commit()
@@ -772,6 +806,17 @@ def get_container_details(
         is_received=container.received_date is not None,
         created_at=container.created_at,
         updated_at=container.updated_at,
+        date_dropped_off=container.date_dropped_off,
+        door=container.door,
+        date_emptied=container.date_emptied,
+        unloaded_by=container.unloaded_by,
+        unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
+        container_cost_drayage=float(container.container_cost_drayage) if container.container_cost_drayage is not None else None,
+        customs_duty_misc=float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
+        per_diem=float(container.per_diem) if container.per_diem is not None else None,
+        country_of_origin=container.country_of_origin,
+        receiving_closure_notes=container.receiving_closure_notes,
+        factory_credit_needed=container.factory_credit_needed,
         summary={
             "total_items": len(items_out),
             "total_qty_in_container": total_qty,

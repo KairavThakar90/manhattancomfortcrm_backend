@@ -19,6 +19,12 @@ class UserCreate(BaseModel):
     password: str
     role: str = "user"  # Default role
     vendor_id: Optional[uuid.UUID] = None
+    # New fields for vendor registration:
+    vendor_name: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    payment_terms: Optional[str] = None
+    lead_time: Optional[int] = None
 
 
 class UserOut(BaseModel):
@@ -85,6 +91,7 @@ class VendorOut(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
     country: Optional[str] = None
+    payment_terms: Optional[str] = None
     is_active: bool
     container_lead_time_days: Optional[int] = None
     updated_at: datetime
@@ -96,6 +103,14 @@ class VendorSummary(BaseModel):
     id: uuid.UUID
     sellercloud_vendor_id: Optional[int] = None
     name: str
+
+
+class VendorUpdate(BaseModel):
+    name: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    payment_terms: Optional[str] = None
+    container_lead_time_days: Optional[int] = None
 
 
 # ---------- Customer ----------
@@ -150,6 +165,20 @@ class ContainerOut(BaseModel):
     warehouse: Optional[WarehouseOut] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    
+    # Lifecycle Fields
+    date_dropped_off: Optional[datetime] = None
+    door: Optional[str] = None
+    date_emptied: Optional[datetime] = None
+    unloaded_by: Optional[str] = None
+    unload_cost: Optional[float] = None
+    container_cost_drayage: Optional[float] = None
+    customs_duty_misc: Optional[float] = None
+    per_diem: Optional[float] = None
+    country_of_origin: Optional[str] = None
+    receiving_closure_notes: Optional[str] = None
+    factory_credit_needed: Optional[str] = None
+    
     # Summary counts (populated by the list endpoint, not from ORM directly)
     total_items: Optional[int] = None
     total_qty_in_container: Optional[int] = None
@@ -204,6 +233,20 @@ class ContainerDetailOut(BaseModel):
     is_received: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # Lifecycle Fields
+    date_dropped_off: Optional[datetime] = None
+    door: Optional[str] = None
+    date_emptied: Optional[datetime] = None
+    unloaded_by: Optional[str] = None
+    unload_cost: Optional[float] = None
+    container_cost_drayage: Optional[float] = None
+    customs_duty_misc: Optional[float] = None
+    per_diem: Optional[float] = None
+    country_of_origin: Optional[str] = None
+    receiving_closure_notes: Optional[str] = None
+    factory_credit_needed: Optional[str] = None
+
     summary: dict = {}
     items: List[ContainerDetailItemOut] = []
 
@@ -227,6 +270,20 @@ class ContainerCreate(BaseModel):
     estimated_arrival_date: Optional[datetime] = Field(default=None, description="Expected arrival date")
     received_date: Optional[datetime] = Field(default=None, description="Actual received date")
     warehouse_id: Optional[Union[uuid.UUID, int]] = Field(default=None, description="Warehouse UUID or SellerCloud integer ID")
+    
+    # Lifecycle Fields
+    date_dropped_off: Optional[datetime] = None
+    door: Optional[str] = None
+    date_emptied: Optional[datetime] = None
+    unloaded_by: Optional[str] = None
+    unload_cost: Optional[float] = None
+    container_cost_drayage: Optional[float] = None
+    customs_duty_misc: Optional[float] = None
+    per_diem: Optional[float] = None
+    country_of_origin: Optional[str] = None
+    receiving_closure_notes: Optional[str] = None
+    factory_credit_needed: Optional[str] = None
+    
     items: List[ContainerItemCreate] = Field(min_length=1, description="List of items in this container")
 
 
@@ -234,6 +291,19 @@ class ContainerUpdate(BaseModel):
     container_name: Optional[str] = Field(default=None, min_length=1, max_length=255, description="Updated container name/number")
     estimated_arrival_date: Optional[datetime] = Field(default=None, description="Updated expected arrival date")
     received_date: Optional[datetime] = Field(default=None, description="Updated actual received date")
+    
+    # Lifecycle Fields
+    date_dropped_off: Optional[datetime] = None
+    door: Optional[str] = None
+    date_emptied: Optional[datetime] = None
+    unloaded_by: Optional[str] = None
+    unload_cost: Optional[float] = None
+    container_cost_drayage: Optional[float] = None
+    customs_duty_misc: Optional[float] = None
+    per_diem: Optional[float] = None
+    country_of_origin: Optional[str] = None
+    receiving_closure_notes: Optional[str] = None
+    factory_credit_needed: Optional[str] = None
 
 
 class ContainerAddItems(BaseModel):
@@ -307,7 +377,10 @@ class PurchaseOrderItemOut(BaseModel):
         instance = super().model_validate(obj, **kwargs)
         
         # Calculate remaining quantity
-        instance.qty_remaining = max(0, instance.qty_ordered - max(instance.qty_received, instance.qty_in_container))
+        qty_ord = instance.qty_ordered or 0
+        qty_rec = instance.qty_received or 0
+        qty_in_cont = instance.qty_in_container or 0
+        instance.qty_remaining = max(0, qty_ord - max(qty_rec, qty_in_cont))
         
         # Load containers from the link table
         if hasattr(obj, 'container_links') and obj.container_links:
@@ -459,10 +532,10 @@ class PurchaseOrderOut(BaseModel):
         # Calculate totals from items
         if instance.items:
             instance.total_item_count = len(instance.items)
-            instance.total_qty_ordered = sum(item.qty_ordered for item in instance.items)
-            instance.total_qty_received = sum(item.qty_received for item in instance.items)
-            instance.total_qty_remaining = sum(item.qty_remaining for item in instance.items if item.qty_remaining)
-            instance.total_qty_in_container = sum(item.qty_in_container for item in instance.items)
+            instance.total_qty_ordered = sum((item.qty_ordered or 0) for item in instance.items)
+            instance.total_qty_received = sum((item.qty_received or 0) for item in instance.items)
+            instance.total_qty_remaining = sum((item.qty_remaining or 0) for item in instance.items if item.qty_remaining)
+            instance.total_qty_in_container = sum((item.qty_in_container or 0) for item in instance.items)
             
             # Collect unique container names from all items
             container_names_set = set()

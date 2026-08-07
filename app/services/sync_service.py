@@ -103,7 +103,9 @@ def sync_vendors(db: Session) -> int:
                 )
                 if existing:
                     for k, v in mapped.items():
-                        setattr(existing, k, v)
+                        # Do not overwrite locally populated fields with None from SellerCloud
+                        if v is not None or getattr(existing, k) is None:
+                            setattr(existing, k, v)
                 else:
                     db.add(models.Vendor(**mapped))
                 synced += 1

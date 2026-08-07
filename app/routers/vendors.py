@@ -57,6 +57,31 @@ def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
     return vendor
 
 
+from app.schemas import VendorUpdate
+
+@router.patch("/{vendor_id}", response_model=VendorOut)
+def update_vendor(
+    vendor_id: str,
+    update: VendorUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    Update vendor information.
+    Allows updating name, country, phone, payment_terms, and lead_time.
+    """
+    vendor = db.query(models.Vendor).filter(models.Vendor.id == vendor_id).first()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    
+    update_data = update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(vendor, key, value)
+        
+    db.commit()
+    db.refresh(vendor)
+    return vendor
+
+
 @router.patch("/{vendor_id}/lead-time", response_model=VendorOut)
 def update_vendor_lead_time(
     vendor_id: str,

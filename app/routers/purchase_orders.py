@@ -274,7 +274,8 @@ def list_purchase_orders(
         escaped_search = re.escape(search)
         search_conditions = [
             models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
-            models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}"))
+            models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}")),
+            models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%"))
         ]
         if search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
@@ -699,7 +700,7 @@ def get_filtered_pos(
         all_pos_for_remaining = q4.distinct().all()
         pos_with_remaining = []
         for po in all_pos_for_remaining:
-            total_remaining = sum(item.qty_ordered - item.qty_received for item in po.items)
+            total_remaining = sum((item.qty_ordered or 0) - (item.qty_received or 0) for item in po.items)
             if total_remaining > 0:
                 pos_with_remaining.append(po)
         pos_with_remaining.sort(key=lambda po: po.created_on or datetime.min, reverse=True)
@@ -798,7 +799,7 @@ def get_filtered_pos(
         pos_with_remaining = []
         for po in all_pos:
             total_remaining = sum(
-                item.qty_ordered - item.qty_received 
+                (item.qty_ordered or 0) - (item.qty_received or 0)
                 for item in po.items
             )
             if total_remaining > 0:
