@@ -886,15 +886,13 @@ def sync_container_from_sellercloud(
         container.container_name = sc.get("ContainerName") or container.container_name
 
         if sc.get("EstimatedArrivalDate"):
-            container.estimated_arrival_date = datetime.fromisoformat(
-                sc["EstimatedArrivalDate"].replace("Z", "+00:00")
-            )
+            raw_dt = datetime.fromisoformat(sc["EstimatedArrivalDate"].replace("Z", ""))
+            container.estimated_arrival_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
 
         received_raw = sc.get("ReceivedOnDate") or sc.get("ReceivedDate")
         if received_raw:
-            container.received_date = datetime.fromisoformat(
-                received_raw.replace("Z", "+00:00")
-            )
+            raw_dt = datetime.fromisoformat(received_raw.replace("Z", ""))
+            container.received_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
 
         warehouse_sc_id = sc.get("ReceivingWarehouseID") or sc.get("ReceiveWarehouseID")
         warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
