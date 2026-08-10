@@ -133,6 +133,10 @@ class OptimizedSyncService:
                         .first()
                     )
                     
+                    from app.services.sync_service import _get_customer_id_from_po_detail
+                    customer_id = _get_customer_id_from_po_detail(self.db, detail)
+                    mapped["customer_id"] = customer_id
+                    
                     if existing_po:
                         # Update existing
                         for k, v in mapped.items():
