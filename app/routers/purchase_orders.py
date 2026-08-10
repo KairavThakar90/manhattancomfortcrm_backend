@@ -329,7 +329,23 @@ def list_purchase_orders(
     po_models = [PurchaseOrderOut.model_validate(r) for r in rows]
     
     # Now convert to dicts
-    results = [po.model_dump(mode='python', exclude={'items', 'comments'}) for po in po_models]
+    results = []
+    for po in po_models:
+        po_dict = po.model_dump(mode='python', exclude={'items', 'comments'})
+        if not po_dict.get('customer'):
+            po_dict['customer'] = {
+                "id": None,
+                "sellercloud_customer_id": None,
+                "company_id": po_dict.get("company_id"),
+                "first_name": "Manhattan",
+                "last_name": "comfort",
+                "email": "",
+                "phone": "",
+                "billing_city": "",
+                "shipping_city": "",
+                "updated_at": None
+            }
+        results.append(po_dict)
     
     # Build response with meta object
     return {
