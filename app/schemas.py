@@ -60,6 +60,15 @@ class UpdatePasswordRequest(BaseModel):
     password: str
     confirm_password: str
 
+class Login2FAResponse(BaseModel):
+    message: str
+    requires_2fa: bool
+    email: str
+
+class Verify2FARequest(BaseModel):
+    email: EmailStr
+    code: str
+
 
 # ---------- Company ----------
 class CompanyOut(BaseModel):

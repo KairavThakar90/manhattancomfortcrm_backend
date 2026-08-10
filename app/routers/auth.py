@@ -1,29 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
+import random
 
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
-from app.services.email_service import send_welcome_email
+from app.services.email_service import send_welcome_email, send_2fa_email
 from app.services.activity_service import log_activity
 from app.config import settings
-from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UpdatePasswordRequest
+from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UpdatePasswordRequest, Login2FAResponse, Verify2FARequest
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
-@router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+@router.post("/login", response_model=Login2FAResponse)
+def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
-    OAuth2 "password" flow: send as x-www-form-urlencoded with
-    fields 'username' (= email) and 'password'.
-    This also makes Swagger's Authorize button work out of the box.
-    
-    Returns both access_token (short-lived) and refresh_token (long-lived).
+    Step 1 of Login: Verify credentials and send 2FA email.
     """
-    # Convert email to lowercase to ensure case insensitivity
     email = form_data.username.lower() if form_data.username else form_data.username
     user = auth_utils.authenticate_user(db, email, form_data.password)
     if not user:
@@ -31,6 +27,43 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
+
+    # Generate 6 digit OTP
+    otp = str(random.randint(100000, 999999))
+    user.otp_code = otp
+    user.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    db.commit()
+
+    # Send email in background
+    background_tasks.add_task(send_2fa_email, email_to=user.email, code=otp, first_name=user.first_name)
+
+    return Login2FAResponse(
+        message="2FA code sent to your email",
+        requires_2fa=True,
+        email=user.email
+    )
+
+@router.post("/verify-2fa", response_model=Token)
+def verify_2fa(request: Verify2FARequest, db: Session = Depends(get_db)):
+    """
+    Step 2 of Login: Verify the OTP code from email.
+    """
+    email = request.email.lower() if request.email else request.email
+    user = db.query(models.User).filter(models.User.email == email).first()
+    
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
+    if not user.otp_code or user.otp_code != request.code:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid 2FA code")
+        
+    if user.otp_expires_at and datetime.utcnow() > user.otp_expires_at.replace(tzinfo=None):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA code expired")
+
+    # Clear OTP
+    user.otp_code = None
+    user.otp_expires_at = None
+    db.commit()
 
     access_token = auth_utils.create_access_token(data={"sub": str(user.id)})
     refresh_token = auth_utils.create_refresh_token(data={"sub": str(user.id)})
