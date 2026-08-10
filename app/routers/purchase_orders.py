@@ -232,6 +232,7 @@ def list_purchase_orders(
     search: Optional[str] = Query(None, description="Search by PO number, order title, or vendor name"),
     date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
+    customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -270,6 +271,13 @@ def list_purchase_orders(
         q = q.join(models.Company, models.PurchaseOrder.company_id == models.Company.id).filter(
             models.Company.sellercloud_company_id == sellercloud_company_id
         )
+    if customer_id:
+        if customer_id.isdigit():
+            q = q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+                models.Customer.sellercloud_customer_id == int(customer_id)
+            )
+        else:
+            q = q.filter(models.PurchaseOrder.customer_id == customer_id)
         
     if search:
         import re
