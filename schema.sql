@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     purchase_title         VARCHAR(255),          -- SellerCloud "PurchaseTitle" (there's no separate PO number field)
     company_id             UUID REFERENCES companies(id) ON DELETE SET NULL,
     vendor_id               UUID REFERENCES vendors(id) ON DELETE SET NULL,
+    customer_id             UUID REFERENCES customers(id) ON DELETE SET NULL,
     purchase_order_status_code INTEGER,           -- raw SellerCloud "PurchaseOrderStatus" enum int
     receiving_status_code       INTEGER,          -- raw SellerCloud "ReceivingStatus" enum int
     status_label                 VARCHAR(50),     -- human-readable, filled in once you map the enum values (see README)
@@ -149,6 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_po_company ON purchase_orders(company_id);
 CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(purchase_order_status_code);
 
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status VARCHAR(50);
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE SET NULL;
 
 -- ---------------------------------------------------------
 -- 5b. Purchase Order Comments
