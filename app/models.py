@@ -29,6 +29,8 @@ class User(Base):
     container_lead_time_days = Column(Integer, nullable=True)
     
     is_active = Column(Boolean, default=True, nullable=False)
+    otp_code = Column(String(10), nullable=True)
+    otp_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     

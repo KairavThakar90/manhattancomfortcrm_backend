@@ -16,6 +16,36 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=True
 )
 
+async def send_2fa_email(email_to: str, code: str, first_name: str = "User"):
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        logger.warning("SMTP credentials not configured. Skipping 2FA email.")
+        return
+
+    subject = "Your Manhattan CRM 2FA Login Code"
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
+        <h2 style="color: #333;">Hello {first_name},</h2>
+        <p>Your 2-Factor Authentication code is:</p>
+        <div style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #007bff; margin: 20px 0; text-align: center;">
+            {code}
+        </div>
+        <p>This code will expire in 10 minutes. If you did not request this, please ignore this email.</p>
+    </div>
+    """
+    
+    message = MessageSchema(
+        subject=subject,
+        recipients=[email_to],
+        body=html,
+        subtype=MessageType.html
+    )
+    
+    try:
+        fm = FastMail(conf)
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send 2FA email to {email_to}: {str(e)}")
+
 async def send_tag_notification(
     emails: list[str], 
     commenter_name: str, 
