@@ -57,7 +57,7 @@ def verify_2fa(request: Verify2FARequest, db: Session = Depends(get_db)):
     if not user.otp_code or user.otp_code != request.code:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid 2FA code")
         
-    if user.otp_expires_at and datetime.utcnow() > user.otp_expires_at:
+    if user.otp_expires_at and datetime.utcnow() > user.otp_expires_at.replace(tzinfo=None):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA code expired")
 
     # Clear OTP
