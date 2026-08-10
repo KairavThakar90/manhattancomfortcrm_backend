@@ -71,6 +71,7 @@ def get_all_filter_categories(
     base_query = db.query(models.PurchaseOrder).options(
         joinedload(models.PurchaseOrder.vendor),
         joinedload(models.PurchaseOrder.company),
+        joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
         joinedload(models.PurchaseOrder.items)
@@ -251,6 +252,7 @@ def list_purchase_orders(
         joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
         joinedload(models.PurchaseOrder.vendor),
         joinedload(models.PurchaseOrder.company),
+        joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
@@ -356,6 +358,7 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
             joinedload(models.PurchaseOrder.company),
+        joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments).joinedload(models.PurchaseOrderItemComment.user),
             joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user)
@@ -629,6 +632,7 @@ def get_filtered_pos(
                 joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
                 joinedload(models.PurchaseOrder.vendor),
                 joinedload(models.PurchaseOrder.company),
+        joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
             )
@@ -723,6 +727,7 @@ def get_filtered_pos(
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
             joinedload(models.PurchaseOrder.company),
+        joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
         )
@@ -1986,3 +1991,27 @@ def get_sync_settings_recommendations(db: Session = Depends(get_db)):
             }
         }
     }
+
+
+@router.post("/sync/customers")
+def trigger_sync_customers(db: Session = Depends(get_db)):
+    """
+    Sync all customers from SellerCloud to local database.
+    """
+    from app.services.sync_service import sync_customers
+    try:
+        count = sync_customers(db)
+        return {"success": True, "message": f"Successfully synced {count} customers."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/sync/backfill-po-customers")
+def trigger_backfill_po_customers(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Backfill customer_id for all existing Purchase Orders. 
+    Runs in the background.
+    """
+    from app.services.sync_service import backfill_po_customers
+    background_tasks.add_task(backfill_po_customers, db)
+    return {"success": True, "message": "Backfill started in the background. Check logs for progress."}

@@ -480,6 +480,8 @@ class PurchaseOrderOut(BaseModel):
     company: Optional[CompanySummary] = None
     vendor_id: Optional[uuid.UUID] = None
     vendor: Optional[VendorSummary] = None  # Nested vendor information
+    customer_id: Optional[uuid.UUID] = None
+    customer: Optional['CustomerOut'] = None
     status: Optional[str] = None
     items: List[PurchaseOrderItemOut] = []
     comments: List[POCommentOut] = []

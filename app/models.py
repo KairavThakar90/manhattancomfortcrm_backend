@@ -151,6 +151,9 @@ class PurchaseOrder(Base):
     # Warehouse Info (ForeignKey to Warehouse table)
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))
     
+    # Customer Info (ForeignKey to Customer table)
+    customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
+    
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -158,6 +161,7 @@ class PurchaseOrder(Base):
     company = relationship("Company", back_populates="purchase_orders")
     vendor = relationship("Vendor", back_populates="purchase_orders")
     warehouse = relationship("Warehouse", back_populates="purchase_orders")
+    customer = relationship("Customer", backref="purchase_orders")
     items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
     comments = relationship("PurchaseOrderComment", back_populates="purchase_order", cascade="all, delete-orphan")
 

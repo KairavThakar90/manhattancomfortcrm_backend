@@ -10,7 +10,7 @@ Adjust the field-mapping dicts (`_map_company`, `_map_vendor`, etc.) once you
 confirm exact response field names from your Swagger UI - the keys on the
 right-hand side (e.g. row.get("Name")) are the SellerCloud response fields.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -198,6 +198,217 @@ def sync_warehouses(db: Session) -> int:
     return count
 
 
+# ---------------- Customers ----------------
+def _map_customer(row: dict) -> dict:
+    return dict(
+        sellercloud_customer_id=row.get("UserID"),
+        first_name=row.get("FirstName"),
+        last_name=row.get("LastName"),
+        email=row.get("Email"),
+        # Other fields could be added if needed based on API response
+        raw_json=row,
+    )
+
+def sync_customers(db: Session) -> int:
+    synced = 0
+    try:
+        page = 1
+        while True:
+            data = sellercloud_client.get_customers(page_number=page, page_size=100)
+            items = data.get("Items") or data.get("items") or data
+            if not items:
+                break
+
+            for row in items:
+                mapped = _map_customer(row)
+                existing = (
+                    db.query(models.Customer)
+                    .filter(models.Customer.sellercloud_customer_id == mapped["sellercloud_customer_id"])
+                    .first()
+                )
+                if existing:
+                    for k, v in mapped.items():
+                        setattr(existing, k, v)
+                else:
+                    db.add(models.Customer(**mapped))
+                synced += 1
+
+            db.commit()
+            if len(items) < 100:
+                break
+            page += 1
+
+        _log_sync(db, "customers", "success", synced)
+    except Exception as e:
+        db.rollback()
+        _log_sync(db, "customers", "failed", synced, str(e))
+        raise
+    return synced
+
+
+def _get_customer_id_from_order_detail(db: Session, order_detail: dict) -> Optional[uuid.UUID]:
+    # 1. Try by OrderDetails.CustomerID
+    sc_customer_id = None
+    order_details_block = order_detail.get("OrderDetails", {})
+    if order_details_block:
+        sc_customer_id = order_details_block.get("CustomerID")
+        
+    if not sc_customer_id or sc_customer_id == 0:
+        # Fallback to older locations just in case
+        sc_customer_id = order_detail.get("UserID") or order_detail.get("Customer", {}).get("ID")
+        
+    if sc_customer_id and sc_customer_id != 0:
+        # Check if we already have this customer in DB
+        customer = db.query(models.Customer).filter(models.Customer.sellercloud_customer_id == sc_customer_id).first()
+        if customer:
+            return customer.id
+            
+        # We don't have it, let's fetch it from SellerCloud
+        try:
+            from app.services.sellercloud_client import sellercloud_client
+            sc_cust = sellercloud_client._request("GET", f"/api/Customers/{sc_customer_id}").json()
+            gen = sc_cust.get("General", {})
+            
+            # Use Addresses block to get accurate billing info
+            addresses = sc_cust.get("Addresses", [])
+            billing = next((a for a in addresses if a.get("IsBillingAddress")), {})
+            if not billing and addresses:
+                billing = addresses[0]
+                
+            new_customer = models.Customer(
+                sellercloud_customer_id=sc_customer_id,
+                first_name=gen.get("FirstName") or billing.get("FirstName", ""),
+                last_name=gen.get("CorporateName") or gen.get("LastName") or billing.get("CompanyName", ""),
+                email=gen.get("Email") or billing.get("EmailAddress", ""),
+                phone=billing.get("Phone") or billing.get("PhoneNumber", ""),
+                billing_address_line1=billing.get("Address") or billing.get("StreetLine1", ""),
+                billing_city=billing.get("City", ""),
+                billing_state=billing.get("State", "") or billing.get("StateCode", ""),
+                billing_postal_code=billing.get("ZipCode", "") or billing.get("PostalCode", ""),
+                billing_country=billing.get("Country", "") or billing.get("CountryCode", "")
+            )
+            db.add(new_customer)
+            db.flush()
+            return new_customer.id
+        except Exception as e:
+            print(f"Error fetching customer {sc_customer_id} from SC: {e}")
+            # Fall back to creating from order detail below
+            
+    # 2. Try by Email or Name from Order's BillingAddress
+    billing = order_detail.get("BillingAddress") or {}
+    email = billing.get("EmailAddress")
+    
+    customer = None
+    if email:
+        customer = db.query(models.Customer).filter(models.Customer.email.ilike(email)).first()
+        
+    if not customer:
+        company = billing.get("CompanyName")
+        last_name = billing.get("LastName")
+        first_name = billing.get("FirstName")
+        
+        from sqlalchemy import or_
+        
+        # Try to match by company or last name if no email
+        if company:
+            # We map company name to last_name, so search for it there
+            customer = db.query(models.Customer).filter(
+                or_(
+                    models.Customer.last_name.ilike(company),
+                    models.Customer.last_name.ilike(last_name) if last_name else False
+                )
+            ).first()
+        elif last_name:
+            customer = db.query(models.Customer).filter(
+                models.Customer.last_name.ilike(last_name),
+                models.Customer.first_name.ilike(first_name) if first_name else True
+            ).first()
+            
+    if customer:
+        return customer.id
+    else:
+        # Auto-create the customer so it can be linked
+        new_customer = models.Customer(
+            first_name=billing.get("FirstName", ""),
+            last_name=billing.get("CompanyName") or billing.get("LastName", ""),
+            email=email or "",
+            phone=billing.get("PhoneNumber", ""),
+            billing_address_line1=billing.get("StreetLine1", ""),
+            billing_city=billing.get("City", ""),
+            billing_state=billing.get("StateCode", ""),
+            billing_postal_code=billing.get("PostalCode", ""),
+            billing_country=billing.get("CountryCode", "")
+        )
+        db.add(new_customer)
+        db.flush()
+        return new_customer.id
+
+def _get_customer_id_from_po_detail(db: Session, detail: dict) -> Optional[uuid.UUID]:
+    """Extracts OrderID from PO detail, fetches Order, and returns local customer UUID."""
+    related_items = detail.get("RelatedItems") or []
+    order_id = None
+    for item in related_items:
+        if item.get("RecordType") == "Order":
+            order_id = item.get("ID")
+            break
+            
+    if not order_id:
+        return None
+        
+    try:
+        from app.services.sellercloud_client import sellercloud_client
+        order_detail = sellercloud_client.get_order(order_id)
+        return _get_customer_id_from_order_detail(db, order_detail)
+    except Exception as e:
+        print(f"Error fetching customer for Order {order_id}: {e}")
+        return None
+
+
+def backfill_po_customers(db: Session):
+    """One-time background task to backfill customer_id for all existing POs."""
+    import time
+    pos = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.customer_id == None).all()
+    total_pos = len(pos)
+    print(f"Starting backfill for {total_pos} POs...")
+    count = 0
+    for idx, po in enumerate(pos):
+        try:
+            print(f"[{idx + 1}/{total_pos}] Processing PO {po.sellercloud_po_id}...")
+            
+            # We already have the raw JSON from the listing API or previous sync
+            detail = po.raw_json or {}
+            
+            # Use existing function which looks for RelatedItems in the dict
+            customer_id = _get_customer_id_from_po_detail(db, detail)
+            
+            if not customer_id and po.purchase_title:
+                # Fallback: Extract from "Created for Order# XXXXX"
+                import re
+                match = re.search(r'Order#\s*(\d+)', po.purchase_title, re.IGNORECASE)
+                if match:
+                    order_id = match.group(1)
+                    try:
+                        from app.services.sellercloud_client import sellercloud_client
+                        order_detail = sellercloud_client.get_order(order_id)
+                        customer_id = _get_customer_id_from_order_detail(db, order_detail)
+                    except Exception as e:
+                        print(f"Fallback order fetch failed for PO {po.sellercloud_po_id}: {e}")
+            
+            if customer_id:
+                po.customer_id = customer_id
+                db.commit()
+                count += 1
+            
+            # Avoid hammering the API and causing SSL timeouts
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"Failed processing PO {po.sellercloud_po_id}: {e}")
+            db.rollback()
+            
+    print(f"Backfill complete! Updated {count} POs with customer links.")
+
+
 # ---------------- Purchase Orders ----------------
 #
 # Confirmed real field names from the working Apps Script:
@@ -351,7 +562,10 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
             case_price=li.get("CostPerCase", 0),
             is_bundle_component=parent_item_id is not None,
             parent_sellercloud_item_id=parent_item_id,
-            expected_delivery_date=li.get("ExpectedDeliveryDate"),
+            expected_delivery_date=(
+                datetime.fromisoformat(li.get("ExpectedDeliveryDate").replace("Z", "")).replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
+                if li.get("ExpectedDeliveryDate") else None
+            ),
             raw_json=li,
         )
 
@@ -560,7 +774,8 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                     eta_raw = details_section.get("EstimatedArrivalDate")
                     if eta_raw:
                         try:
-                            estimated_arrival_date = datetime.fromisoformat(eta_raw.replace("Z", "+00:00"))
+                            raw_dt = datetime.fromisoformat(eta_raw.replace("Z", ""))
+                            estimated_arrival_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
                         except ValueError:
                             pass
                     
@@ -568,7 +783,8 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                     recv_raw = details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate")
                     if recv_raw:
                         try:
-                            received_date = datetime.fromisoformat(recv_raw.replace("Z", "+00:00"))
+                            raw_dt = datetime.fromisoformat(recv_raw.replace("Z", ""))
+                            received_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
                         except ValueError:
                             pass
 

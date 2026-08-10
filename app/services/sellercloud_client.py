@@ -115,6 +115,12 @@ class SellerCloudClient:
         """Fetch a page of customers."""
         resp = self._request("GET", "/api/Customers", params={"pageNumber": page_number, "pageSize": page_size})
         return resp.json()
+        
+    # ---------------- Orders ----------------
+    def get_order(self, order_id: int) -> dict:
+        """Fetch a specific order."""
+        resp = self._request("GET", f"/api/Orders/{order_id}")
+        return resp.json()
 
     # ---------------- Warehouses ----------------
     def get_warehouses(self) -> dict:
