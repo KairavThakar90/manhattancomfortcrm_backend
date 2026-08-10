@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS vendors (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS vendor_id UUID REFERENCES vendors(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS country VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS container_lead_time_days INTEGER;
+
 -- ---------------------------------------------------------
 -- 4. Customers (SellerCloud "Customers" tied to Orders,
 --    linked to a Company)
@@ -107,9 +113,12 @@ CREATE TABLE IF NOT EXISTS warehouses (
     is_default                 BOOLEAN DEFAULT FALSE,
     warehouse_type             VARCHAR(50),
     is_sellable                BOOLEAN DEFAULT TRUE,
+    is_active                  BOOLEAN DEFAULT TRUE,
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS purchase_orders (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -128,6 +137,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     total_amount                    NUMERIC(14,2),
     currency                        VARCHAR(10) DEFAULT 'USD',
     notes                            TEXT,
+    status                           VARCHAR(50),
     warehouse_id                     UUID REFERENCES warehouses(id) ON DELETE SET NULL,
     raw_json                        JSONB,
     created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -137,6 +147,8 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
 CREATE INDEX IF NOT EXISTS idx_po_vendor ON purchase_orders(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_po_company ON purchase_orders(company_id);
 CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(purchase_order_status_code);
+
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status VARCHAR(50);
 
 -- ---------------------------------------------------------
 -- 5b. Purchase Order Comments
@@ -201,6 +213,7 @@ CREATE INDEX IF NOT EXISTS idx_po_item_comments_item ON purchase_order_item_comm
 --     to first container arrival) - used to flag overdue POs
 -- ---------------------------------------------------------
 ALTER TABLE vendors ADD COLUMN IF NOT EXISTS container_lead_time_days INTEGER;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
 
 -- ---------------------------------------------------------
 -- 6c. Shipping containers (SellerCloud ShippingContainers)
@@ -220,6 +233,17 @@ CREATE TABLE IF NOT EXISTS shipping_containers (
 );
 
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS warehouse_id UUID REFERENCES warehouses(id) ON DELETE SET NULL;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS date_dropped_off TIMESTAMPTZ;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS door VARCHAR(50);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS date_emptied TIMESTAMPTZ;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS unloaded_by VARCHAR(255);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS unload_cost NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS container_cost_drayage NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS customs_duty_misc NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS per_diem NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS country_of_origin VARCHAR(120);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS receiving_closure_notes TEXT;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS factory_credit_needed TEXT;
 
 CREATE TABLE IF NOT EXISTS purchase_order_item_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
