@@ -11,6 +11,8 @@ confirm exact response field names from your Swagger UI - the keys on the
 right-hand side (e.g. row.get("Name")) are the SellerCloud response fields.
 """
 from datetime import datetime, timezone
+import uuid
+from typing import Optional, List, Dict, Any
 
 from sqlalchemy.orm import Session
 
