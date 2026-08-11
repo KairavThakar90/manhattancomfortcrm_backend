@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import random
+import httpx
 from typing import Union
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -68,11 +69,19 @@ def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db)):
     Login via Google: Verify Google JWT and return access tokens.
     """
     try:
-        idinfo = id_token.verify_oauth2_token(
-            request.token, 
-            google_requests.Request(), 
-            settings.GOOGLE_CLIENT_ID
-        )
+        # Support both Access Tokens (ya29...) and ID Tokens (JWT)
+        if request.token.startswith("ya29."):
+            response = httpx.get(f"https://oauth2.googleapis.com/tokeninfo?access_token={request.token}")
+            if response.status_code != 200:
+                raise ValueError("Invalid access token")
+            idinfo = response.json()
+        else:
+            idinfo = id_token.verify_oauth2_token(
+                request.token, 
+                google_requests.Request(), 
+                settings.GOOGLE_CLIENT_ID
+            )
+            
         email = idinfo.get("email")
         if not email:
             raise HTTPException(
