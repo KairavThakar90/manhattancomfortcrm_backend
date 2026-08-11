@@ -72,6 +72,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS country VARCHAR(120);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS container_lead_time_days INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMPTZ;
 
 -- ---------------------------------------------------------
 -- 4. Customers (SellerCloud "Customers" tied to Orders,
