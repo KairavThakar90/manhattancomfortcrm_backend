@@ -19,28 +19,48 @@ class UpdateVendorLeadTime(BaseModel):
 
 @router.get("", response_model=PaginatedResponse)
 def list_vendors(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=200),
+    page: Optional[int] = Query(None, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=200),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     db: Session = Depends(get_db),
 ):
     """List all vendors with pagination."""
-    q = db.query(models.Vendor)
+    from sqlalchemy import func
+    
+    q = db.query(
+        models.Vendor,
+        func.count(models.PurchaseOrder.id).label('po_count')
+    ).outerjoin(
+        models.PurchaseOrder, models.Vendor.id == models.PurchaseOrder.vendor_id
+    )
+    
     if is_active is not None:
         q = q.filter(models.Vendor.is_active == is_active)
 
+    q = q.group_by(models.Vendor.id)
+
     total = q.count()
-    rows = (
-        q.order_by(models.Vendor.name)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    if page and page_size:
+        rows = (
+            q.order_by(models.Vendor.name)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+    else:
+        rows = q.order_by(models.Vendor.name).all()
+    
+    results = []
+    for vendor, po_count in rows:
+        vendor_dict = VendorOut.model_validate(vendor).model_dump(mode='python')
+        vendor_dict['po_count'] = po_count
+        results.append(vendor_dict)
+        
     return PaginatedResponse(
         total=total,
-        page=page,
-        page_size=page_size,
-        results=[VendorOut.model_validate(r) for r in rows],
+        page=page if page else 1,
+        page_size=page_size if page_size else total,
+        results=results,
     )
 
 

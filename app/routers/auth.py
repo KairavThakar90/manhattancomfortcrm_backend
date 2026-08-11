@@ -35,7 +35,8 @@ def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestFor
     db.commit()
 
     # Send email in background
-    background_tasks.add_task(send_2fa_email, email_to=user.email, code=otp, first_name=user.first_name)
+    greeting_name = user.full_name or user.first_name or user.email
+    background_tasks.add_task(send_2fa_email, email_to=user.email, code=otp, first_name=greeting_name)
 
     return Login2FAResponse(
         message="2FA code sent to your email",

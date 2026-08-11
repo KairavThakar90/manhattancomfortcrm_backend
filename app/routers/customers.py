@@ -9,23 +9,46 @@ from app.schemas import CustomerOut, PaginatedResponse
 router = APIRouter(prefix="/customers", tags=["Customers"], dependencies=[Depends(get_current_user)])
 
 
+from typing import Optional
+
 @router.get("", response_model=PaginatedResponse)
 def list_customers(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=200),
+    page: Optional[int] = Query(None, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=200),
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.Customer)
+    from sqlalchemy import func
+
+    q = db.query(
+        models.Customer,
+        func.count(models.PurchaseOrder.id).label('po_count')
+    ).outerjoin(
+        models.PurchaseOrder, models.Customer.id == models.PurchaseOrder.customer_id
+    )
+    
     if company_id:
         q = q.filter(models.Customer.company_id == company_id)
+        
+    q = q.group_by(models.Customer.id)
+    
     total = q.count()
-    rows = q.order_by(models.Customer.last_name).offset((page - 1) * page_size).limit(page_size).all()
+    if page and page_size:
+        rows = q.order_by(models.Customer.last_name).offset((page - 1) * page_size).limit(page_size).all()
+    else:
+        rows = q.order_by(models.Customer.last_name).all()
+    
+    results = []
+    for customer, po_count in rows:
+        cust_dict = CustomerOut.model_validate(customer).model_dump(mode='python')
+        cust_dict['po_count'] = po_count
+        results.append(cust_dict)
+        
     return PaginatedResponse(
         total=total,
-        page=page,
-        page_size=page_size,
-        results=[CustomerOut.model_validate(r) for r in rows],
+        page=page if page else 1,
+        page_size=page_size if page_size else total,
+        results=results,
     )
 
 
