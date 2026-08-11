@@ -182,6 +182,20 @@ class PurchaseOrderComment(Base):
     purchase_order = relationship("PurchaseOrder", back_populates="comments")
     user = relationship("User", back_populates="po_comments")
     replies = relationship("PurchaseOrderComment")
+    attachments = relationship("PurchaseOrderCommentAttachment", back_populates="comment", cascade="all, delete-orphan")
+
+class PurchaseOrderCommentAttachment(Base):
+    __tablename__ = "purchase_order_comment_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    comment_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_comments.id", ondelete="CASCADE"), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_url = Column(Text, nullable=False)
+    content_type = Column(String(100), nullable=True)
+    size = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    comment = relationship("PurchaseOrderComment", back_populates="attachments")
 
 
 class PurchaseOrderItemComment(Base):
@@ -198,6 +212,20 @@ class PurchaseOrderItemComment(Base):
     item = relationship("PurchaseOrderItem", back_populates="comments")
     user = relationship("User", back_populates="po_item_comments")
     replies = relationship("PurchaseOrderItemComment")
+    attachments = relationship("PurchaseOrderItemCommentAttachment", back_populates="comment", cascade="all, delete-orphan")
+
+class PurchaseOrderItemCommentAttachment(Base):
+    __tablename__ = "purchase_order_item_comment_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    comment_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_item_comments.id", ondelete="CASCADE"), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_url = Column(Text, nullable=False)
+    content_type = Column(String(100), nullable=True)
+    size = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    comment = relationship("PurchaseOrderItemComment", back_populates="attachments")
 
 
 

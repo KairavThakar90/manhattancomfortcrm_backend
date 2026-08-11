@@ -4,7 +4,7 @@ import csv
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, cast, String
@@ -32,7 +32,7 @@ def po_id_filter_clause(po_id: str):
         raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID, SellerCloud integer ID, or 'PO-<id>'.")
 
 
-async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, section="Purchase Orders", po_number=None, sku=None, comment_text=""):
+async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, section="Purchase Orders", po_number=None, sku=None, comment_text="", attachments=None):
     if not tagged_user_ids:
         return
     import app.models as models
@@ -48,7 +48,8 @@ async def process_comment_tags(db, tagged_user_ids, commenter_name, link, backgr
             section=section,
             po_number=po_number,
             sku=sku,
-            comment_text=comment_text
+            comment_text=comment_text,
+            attachments=attachments
         )
 
 
@@ -283,7 +284,9 @@ def list_purchase_orders(
             models.Company.sellercloud_company_id == sellercloud_company_id
         )
     if customer_id:
-        if customer_id.isdigit():
+        if customer_id == "00000000-0000-0000-0000-000000000000" or customer_id == "0":
+            q = q.filter(models.PurchaseOrder.customer_id.is_(None))
+        elif customer_id.isdigit():
             q = q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
                 models.Customer.sellercloud_customer_id == int(customer_id)
             )
@@ -296,7 +299,9 @@ def list_purchase_orders(
         search_conditions = [
             models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
             models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}")),
-            models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%"))
+            models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%")),
+            models.PurchaseOrder.customer.has(models.Customer.first_name.ilike(f"{search}%")),
+            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%"))
         ]
         if search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
@@ -413,12 +418,17 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
 @router.post("/{po_id}/comments", response_model=POCommentOut)
 async def add_po_comment(
     po_id: str,
-    comment_data: POCommentCreate,
     background_tasks: BackgroundTasks,
+    comment: str = Form(...),
+    parent_id: Optional[str] = Form(None),
+    tagged_user_ids: str = Form("[]"),
+    files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    import json
     from app.config import settings
+    from app.services.gcs_service import upload_file_to_gcs
     filter_clause = po_id_filter_clause(po_id)
 
     po = db.query(models.PurchaseOrder).filter(filter_clause).first()
@@ -429,22 +439,75 @@ async def add_po_comment(
         if str(po.vendor_id) != str(current_user.vendor_id):
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
 
+    try:
+        tagged_users = json.loads(tagged_user_ids)
+    except Exception:
+        tagged_users = []
+
+    # Parse parent_id if it's "null" string
+    if parent_id == "null" or not parent_id:
+        parent_uuid = None
+    else:
+        try:
+            parent_uuid = uuid.UUID(parent_id)
+        except ValueError:
+            parent_uuid = None
+
     new_comment = models.PurchaseOrderComment(
         purchase_order_id=po.id,
         user_id=current_user.id,
-        comment=comment_data.comment,
-        parent_id=comment_data.parent_id
+        comment=comment,
+        parent_id=parent_uuid
     )
     db.add(new_comment)
     db.commit()
     db.refresh(new_comment)
     new_comment.user_name = current_user.full_name or current_user.email
     
+    # Process Attachments
+    uploaded_attachments = []
+    email_attachments = []
+    
+    # Check sizes first
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+    for f in files:
+        if not f.filename:
+            continue
+        # Read bytes
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.PurchaseOrderCommentAttachment(
+            comment_id=new_comment.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        email_attachments.append({
+            "file_name": f.filename,
+            "content": file_bytes,
+            "content_type": f.content_type
+        })
+        
+    if uploaded_attachments:
+        db.commit()
+    
+    setattr(new_comment, "attachments", uploaded_attachments)
+    
     # Process Tags
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?comment_id={new_comment.id}"
     await process_comment_tags(
         db=db,
-        tagged_user_ids=comment_data.tagged_user_ids,
+        tagged_user_ids=tagged_users,
         commenter_name=new_comment.user_name,
         link=link,
         background_tasks=background_tasks,
@@ -452,7 +515,8 @@ async def add_po_comment(
         section="Purchase Orders",
         po_number=str(po.sellercloud_po_id) if po else None,
         sku=None,
-        comment_text=new_comment.comment
+        comment_text=new_comment.comment,
+        attachments=email_attachments
     )
     
     log_activity(db, action="ADD_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"comment_id": str(new_comment.id)})
@@ -523,33 +587,90 @@ def get_po_item_comments(
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
 async def add_po_item_comment(
     item_id: str,
-    comment_data: POItemCommentCreate,
     background_tasks: BackgroundTasks,
+    comment: str = Form(...),
+    parent_id: Optional[str] = Form(None),
+    tagged_user_ids: str = Form("[]"),
+    files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    import json
+    import uuid
     from app.config import settings
+    from app.services.gcs_service import upload_file_to_gcs
+    
     item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
         
+    try:
+        tagged_users = json.loads(tagged_user_ids)
+    except Exception:
+        tagged_users = []
+
+    if parent_id == "null" or not parent_id:
+        parent_uuid = None
+    else:
+        try:
+            parent_uuid = uuid.UUID(parent_id)
+        except ValueError:
+            parent_uuid = None
+
     new_comment = models.PurchaseOrderItemComment(
         purchase_order_item_id=item.id,
         user_id=current_user.id,
-        comment=comment_data.comment,
-        parent_id=comment_data.parent_id
+        comment=comment,
+        parent_id=parent_uuid
     )
     db.add(new_comment)
     db.commit()
     db.refresh(new_comment)
     new_comment.user_name = current_user.full_name or current_user.email
     
+    # Process Attachments
+    uploaded_attachments = []
+    email_attachments = []
+    
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+    for f in files:
+        if not f.filename:
+            continue
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.PurchaseOrderItemCommentAttachment(
+            comment_id=new_comment.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        email_attachments.append({
+            "file_name": f.filename,
+            "content": file_bytes,
+            "content_type": f.content_type
+        })
+        
+    if uploaded_attachments:
+        db.commit()
+    
+    setattr(new_comment, "attachments", uploaded_attachments)
+    
     # Process Tags
     po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == item.purchase_order_id).first() if item else None
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?item_id={item.sellercloud_item_id}&comment_id={new_comment.id}" if po else ""
     await process_comment_tags(
         db=db,
-        tagged_user_ids=comment_data.tagged_user_ids,
+        tagged_user_ids=tagged_users,
         commenter_name=new_comment.user_name,
         link=link,
         background_tasks=background_tasks,
@@ -557,7 +678,8 @@ async def add_po_item_comment(
         section="Purchase Orders",
         po_number=str(po.sellercloud_po_id) if po else None,
         sku=item.sku if item else None,
-        comment_text=new_comment.comment
+        comment_text=new_comment.comment,
+        attachments=email_attachments
     )
     
     log_activity(db, action="ADD_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id), details={"comment_id": str(new_comment.id)})
@@ -611,6 +733,7 @@ def get_filtered_pos(
     page_size: int = Query(25, ge=1, le=200),
     filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items. If not provided, returns all 4 categories."),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
+    customer_id: Optional[str] = Query(None, description="Filter by customer UUID or SC ID"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -663,6 +786,16 @@ def get_filtered_pos(
             base_q = base_q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
         elif vendor_id:
             base_q = base_q.filter(models.PurchaseOrder.vendor_id == vendor_id)
+            
+        if customer_id:
+            if customer_id == "00000000-0000-0000-0000-000000000000" or customer_id == "0":
+                base_q = base_q.filter(models.PurchaseOrder.customer_id.is_(None))
+            elif customer_id.isdigit():
+                base_q = base_q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+                    models.Customer.sellercloud_customer_id == int(customer_id)
+                )
+            else:
+                base_q = base_q.filter(models.PurchaseOrder.customer_id == customer_id)
         
         # Helper function to create response object
         def create_category_response(data_list, total):
@@ -758,6 +891,16 @@ def get_filtered_pos(
         q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
     elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
+        
+    if customer_id:
+        if customer_id == "00000000-0000-0000-0000-000000000000" or customer_id == "0":
+            q = q.filter(models.PurchaseOrder.customer_id.is_(None))
+        elif customer_id.isdigit():
+            q = q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+                models.Customer.sellercloud_customer_id == int(customer_id)
+            )
+        else:
+            q = q.filter(models.PurchaseOrder.customer_id == customer_id)
     
     # Apply filter type
     if filter_type == "new_without_invoice":

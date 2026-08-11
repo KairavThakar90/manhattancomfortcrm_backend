@@ -54,7 +54,8 @@ async def send_tag_notification(
     section: str = "Purchase Orders", 
     po_number: str = None, 
     sku: str = None, 
-    comment_text: str = ""
+    comment_text: str = "",
+    attachments: list = None
 ):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         logger.warning("SMTP credentials not configured. Skipping email notification.")
@@ -106,6 +107,22 @@ async def send_tag_notification(
     }
     if cc_emails:
         message_kwargs["cc"] = cc_emails
+        
+    if attachments:
+        formatted_attachments = []
+        for att in attachments:
+            mime_type = "application"
+            mime_subtype = "octet-stream"
+            if att.get("content_type") and "/" in att["content_type"]:
+                mime_type, mime_subtype = att["content_type"].split("/", 1)
+                
+            formatted_attachments.append({
+                "file": att["content"],
+                "filename": att["file_name"],
+                "mime_type": mime_type,
+                "mime_subtype": mime_subtype
+            })
+        message_kwargs["attachments"] = formatted_attachments
 
     message = MessageSchema(**message_kwargs)
 

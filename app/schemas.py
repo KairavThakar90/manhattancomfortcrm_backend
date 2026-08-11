@@ -434,6 +434,17 @@ class POCommentUpdate(BaseModel):
     tagged_user_ids: List[uuid.UUID] = []
 
 
+class AttachmentOut(BaseModel):
+    id: uuid.UUID
+    file_name: str
+    file_url: str
+    content_type: Optional[str] = None
+    size: Optional[int] = None
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
 class POCommentOut(BaseModel):
     id: uuid.UUID
     comment: str
@@ -442,6 +453,7 @@ class POCommentOut(BaseModel):
     user_name: Optional[str] = None
     parent_id: Optional[uuid.UUID] = None
     is_edited: bool = False
+    attachments: List[AttachmentOut] = []
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -458,6 +470,7 @@ class POItemCommentOut(BaseModel):
     user_name: Optional[str] = None
     parent_id: Optional[uuid.UUID] = None
     is_edited: bool = False
+    attachments: List[AttachmentOut] = []
     
     model_config = ConfigDict(from_attributes=True)
 
