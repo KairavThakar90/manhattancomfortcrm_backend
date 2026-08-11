@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     SELLERCLOUD_PASSWORD: str
     SELLERCLOUD_PO_VIEW_ID: int = 25  # the saved SellerCloud PO view/filter your Apps Script uses
 
+       # Google Cloud Storage
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
+    GCS_BUCKET_NAME: str = ""
+
+    GOOGLE_CLIENT_ID: str
     FRONTEND_ORIGIN: str = "http://localhost:3000"
 
     # Email / SMTP Settings

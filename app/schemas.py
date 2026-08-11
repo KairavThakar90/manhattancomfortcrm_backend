@@ -11,6 +11,10 @@ class UserLogin(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    token: str
+
+
 class UserCreate(BaseModel):
     """Schema for creating a new user"""
     first_name: str
@@ -108,6 +112,7 @@ class VendorOut(BaseModel):
     is_active: bool
     container_lead_time_days: Optional[int] = None
     updated_at: datetime
+    po_count: int = 0
 
 
 class VendorSummary(BaseModel):
@@ -139,6 +144,7 @@ class CustomerOut(BaseModel):
     billing_city: Optional[str] = None
     shipping_city: Optional[str] = None
     updated_at: datetime
+    po_count: int = 0
 
 
 # ---------- Purchase Order ----------
