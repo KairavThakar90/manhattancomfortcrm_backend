@@ -737,6 +737,7 @@ def get_filtered_pos(
     page_size: int = Query(25, ge=1, le=200),
     filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items. If not provided, returns all 4 categories."),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
+    customer_id: Optional[str] = Query(None, description="Filter by customer UUID or SC ID"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -789,6 +790,16 @@ def get_filtered_pos(
             base_q = base_q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
         elif vendor_id:
             base_q = base_q.filter(models.PurchaseOrder.vendor_id == vendor_id)
+            
+        if customer_id:
+            if customer_id == "00000000-0000-0000-0000-000000000000" or customer_id == "0":
+                base_q = base_q.filter(models.PurchaseOrder.customer_id.is_(None))
+            elif customer_id.isdigit():
+                base_q = base_q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+                    models.Customer.sellercloud_customer_id == int(customer_id)
+                )
+            else:
+                base_q = base_q.filter(models.PurchaseOrder.customer_id == customer_id)
         
         # Helper function to create response object
         def create_category_response(data_list, total):
@@ -884,6 +895,16 @@ def get_filtered_pos(
         q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
     elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
+        
+    if customer_id:
+        if customer_id == "00000000-0000-0000-0000-000000000000" or customer_id == "0":
+            q = q.filter(models.PurchaseOrder.customer_id.is_(None))
+        elif customer_id.isdigit():
+            q = q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+                models.Customer.sellercloud_customer_id == int(customer_id)
+            )
+        else:
+            q = q.filter(models.PurchaseOrder.customer_id == customer_id)
     
     # Apply filter type
     if filter_type == "new_without_invoice":
