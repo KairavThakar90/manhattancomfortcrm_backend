@@ -4,7 +4,7 @@ Container API endpoints
 from typing import Optional, List
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -599,6 +599,7 @@ def create_container(
 def update_container(
     container_id: str,
     update_data: ContainerUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -641,7 +642,7 @@ def update_container(
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
         "unload_cost", "container_cost_drayage", "customs_duty_misc", 
         "per_diem", "country_of_origin", "receiving_closure_notes", 
-        "factory_credit_needed"
+        "factory_credit_needed", "trucker_email"
     ]
     for field in lifecycle_fields:
         if field in update_dict:
@@ -650,6 +651,19 @@ def update_container(
     container.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(container)
+
+    # Email notification logic
+    if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
+        from app.services.email_service import send_container_emptied_notification
+        formatted_date = container.date_emptied.strftime('%Y-%m-%d %H:%M:%S')
+        background_tasks.add_task(
+            send_container_emptied_notification,
+            container.trucker_email,
+            container.container_name,
+            formatted_date
+        )
+        container.last_notified_trucker_email = container.trucker_email
+        db.commit()
 
     log_activity(db, action="UPDATE_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details=update_data.model_dump(mode='json', exclude_unset=True))
 

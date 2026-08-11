@@ -307,12 +307,28 @@ def list_purchase_orders(
         q = q.filter(models.PurchaseOrder.date_ordered <= date_to)
 
     # Apply sorting
+    from sqlalchemy import case
+    from datetime import timezone
+    cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
+    
+    is_invoice_delayed_expr = case(
+        (
+            and_(
+                models.PurchaseOrder.invoice_date.is_(None),
+                models.PurchaseOrder.created_on <= cutoff_10_days
+            ),
+            1
+        ),
+        else_=0
+    )
+
     sort_field_map = {
         "created_on": models.PurchaseOrder.created_on,
         "date_ordered": models.PurchaseOrder.date_ordered,
         "invoice_date": models.PurchaseOrder.invoice_date,
         "expected_delivery_date": models.PurchaseOrder.expected_delivery_date,
         "total_amount": models.PurchaseOrder.total_amount,
+        "is_invoice_delayed": is_invoice_delayed_expr,
     }
     
     sort_field = sort_field_map.get(sort_by, models.PurchaseOrder.date_ordered)
