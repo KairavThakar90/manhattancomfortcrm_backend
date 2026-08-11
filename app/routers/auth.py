@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import random
-
+from typing import Union
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -21,7 +21,7 @@ from app.schemas import (
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
-@router.post("/login", response_model=Login2FAResponse)
+@router.post("/login", response_model=Union[Login2FAResponse, Token])
 def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
     Step 1 of Login: Verify credentials and send 2FA email.
@@ -40,6 +40,17 @@ def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestFor
     user.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
     db.commit()
 
+    # Bypass 2FA for specific service account
+    if email == "googlecloudcron@manhattancomfort.com":
+        access_token = auth_utils.create_access_token(data={"sub": str(user.id)})
+        refresh_token = auth_utils.create_refresh_token(data={"sub": str(user.id)})
+        log_activity(db, action="LOGIN_BYPASS_2FA", user_id=user.id, entity_type="USER", entity_id=str(user.id))
+        return Token(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            user=UserOut.model_validate(user)
+        )
+
     # Send email in background
     greeting_name = user.full_name or user.first_name or user.email
     background_tasks.add_task(send_2fa_email, email_to=user.email, code=otp, first_name=greeting_name)
@@ -51,10 +62,10 @@ def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestFor
     )
 
 
-@router.post("/google", response_model=Login2FAResponse)
-def google_login(request: GoogleLoginRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@router.post("/google", response_model=Token)
+def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db)):
     """
-    Step 1 of Login via Google: Verify Google JWT and send 2FA email.
+    Login via Google: Verify Google JWT and return access tokens.
     """
     try:
         idinfo = id_token.verify_oauth2_token(
@@ -87,20 +98,14 @@ def google_login(request: GoogleLoginRequest, background_tasks: BackgroundTasks,
             detail="User account is inactive",
         )
 
-    # Generate 6 digit OTP
-    otp = str(random.randint(100000, 999999))
-    user.otp_code = otp
-    user.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
-    db.commit()
-
-    # Send email in background
-    greeting_name = user.full_name or user.first_name or user.email
-    background_tasks.add_task(send_2fa_email, email_to=user.email, code=otp, first_name=greeting_name)
-
-    return Login2FAResponse(
-        message="2FA code sent to your email",
-        requires_2fa=True,
-        email=user.email
+    access_token = auth_utils.create_access_token(data={"sub": str(user.id)})
+    refresh_token = auth_utils.create_refresh_token(data={"sub": str(user.id)})
+    log_activity(db, action="LOGIN_GOOGLE", user_id=user.id, entity_type="USER", entity_id=str(user.id))
+    
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=UserOut.model_validate(user)
     )
 
 
