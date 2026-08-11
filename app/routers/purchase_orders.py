@@ -311,15 +311,22 @@ def list_purchase_orders(
     from datetime import timezone
     cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
     
+    # 1 = On Time (has invoice)
+    # 2 = Pending (no invoice, <= 10 days)
+    # 3 = Delay (no invoice, > 10 days)
     is_invoice_delayed_expr = case(
+        (
+            models.PurchaseOrder.invoice_date.isnot(None),
+            1
+        ),
         (
             and_(
                 models.PurchaseOrder.invoice_date.is_(None),
                 models.PurchaseOrder.created_on <= cutoff_10_days
             ),
-            1
+            3
         ),
-        else_=0
+        else_=2
     )
 
     sort_field_map = {
@@ -334,9 +341,9 @@ def list_purchase_orders(
     sort_field = sort_field_map.get(sort_by, models.PurchaseOrder.date_ordered)
     
     if sort_order and sort_order.lower() == "asc":
-        q = q.order_by(sort_field.asc())
+        q = q.order_by(sort_field.asc(), models.PurchaseOrder.created_on.desc())
     else:
-        q = q.order_by(sort_field.desc())
+        q = q.order_by(sort_field.desc(), models.PurchaseOrder.created_on.desc())
 
     total = q.count()
     
