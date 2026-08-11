@@ -11,6 +11,10 @@ class UserLogin(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    token: str
+
+
 class UserCreate(BaseModel):
     """Schema for creating a new user"""
     first_name: str

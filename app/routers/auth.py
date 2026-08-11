@@ -4,13 +4,19 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import random
 
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
 from app.services.email_service import send_welcome_email, send_2fa_email
 from app.services.activity_service import log_activity
 from app.config import settings
-from app.schemas import Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UpdatePasswordRequest, Login2FAResponse, Verify2FARequest
+from app.schemas import (
+    Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, 
+    UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest
+)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -43,6 +49,60 @@ def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestFor
         requires_2fa=True,
         email=user.email
     )
+
+
+@router.post("/google", response_model=Login2FAResponse)
+def google_login(request: GoogleLoginRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Step 1 of Login via Google: Verify Google JWT and send 2FA email.
+    """
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            request.token, 
+            google_requests.Request(), 
+            settings.GOOGLE_CLIENT_ID
+        )
+        email = idinfo.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Google token did not contain an email",
+            )
+        email = email.lower()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google token",
+        )
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not registered",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is inactive",
+        )
+
+    # Generate 6 digit OTP
+    otp = str(random.randint(100000, 999999))
+    user.otp_code = otp
+    user.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    db.commit()
+
+    # Send email in background
+    greeting_name = user.full_name or user.first_name or user.email
+    background_tasks.add_task(send_2fa_email, email_to=user.email, code=otp, first_name=greeting_name)
+
+    return Login2FAResponse(
+        message="2FA code sent to your email",
+        requires_2fa=True,
+        email=user.email
+    )
+
 
 @router.post("/verify-2fa", response_model=Token)
 def verify_2fa(request: Verify2FARequest, db: Session = Depends(get_db)):
