@@ -273,7 +273,9 @@ def list_purchase_orders(
             models.Company.sellercloud_company_id == sellercloud_company_id
         )
     if customer_id:
-        if customer_id.isdigit():
+        if customer_id == "00000000-0000-0000-0000-000000000000" or customer_id == "0":
+            q = q.filter(models.PurchaseOrder.customer_id.is_(None))
+        elif customer_id.isdigit():
             q = q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
                 models.Customer.sellercloud_customer_id == int(customer_id)
             )
@@ -286,7 +288,9 @@ def list_purchase_orders(
         search_conditions = [
             models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
             models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}")),
-            models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%"))
+            models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%")),
+            models.PurchaseOrder.customer.has(models.Customer.first_name.ilike(f"{search}%")),
+            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%"))
         ]
         if search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))

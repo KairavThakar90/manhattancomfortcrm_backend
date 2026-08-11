@@ -39,6 +39,24 @@ def list_customers(
         rows = q.order_by(models.Customer.last_name).all()
     
     results = []
+    
+    # Add a virtual "Manhattan Comfort" customer for POs with NO customer assigned
+    if not page or page == 1:
+        unassigned_po_count = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.customer_id.is_(None)).count()
+        if unassigned_po_count > 0:
+            results.append({
+                "id": "00000000-0000-0000-0000-000000000000",
+                "sellercloud_customer_id": 0,
+                "first_name": "Manhattan",
+                "last_name": "Comfort",
+                "email": "",
+                "phone": "",
+                "company_id": None,
+                "is_active": True,
+                "po_count": unassigned_po_count
+            })
+            total += 1
+            
     for customer, po_count in rows:
         cust_dict = CustomerOut.model_validate(customer).model_dump(mode='python')
         cust_dict['po_count'] = po_count

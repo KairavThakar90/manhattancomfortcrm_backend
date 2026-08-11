@@ -61,6 +61,8 @@ def list_containers(
     sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
     date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
+    sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
 ):
     """
@@ -136,6 +138,21 @@ def list_containers(
             from datetime import time
             date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
         query = query.filter(models.ShippingContainer.received_date <= date_to)
+
+    if sort_by == "eta_delivery":
+        sort_col = models.ShippingContainer.estimated_arrival_date
+    elif sort_by == "receive_date":
+        sort_col = models.ShippingContainer.received_date
+    elif sort_by == "status":
+        sort_col = models.ShippingContainer.received_date.is_(None)
+    else:
+        sort_col = None
+
+    if sort_col is not None:
+        if sort_order and sort_order.lower() == "asc":
+            order_clauses.append(sort_col.asc())
+        else:
+            order_clauses.append(sort_col.desc())
 
     total = query.count()
     containers = (
