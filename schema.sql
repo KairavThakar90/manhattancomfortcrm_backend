@@ -172,6 +172,18 @@ ALTER TABLE purchase_order_comments ADD COLUMN IF NOT EXISTS is_edited BOOLEAN N
 
 CREATE INDEX IF NOT EXISTS idx_po_comments_po ON purchase_order_comments(purchase_order_id);
 
+CREATE TABLE IF NOT EXISTS purchase_order_comment_attachments (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    comment_id    UUID NOT NULL REFERENCES purchase_order_comments(id) ON DELETE CASCADE,
+    file_name     VARCHAR(255) NOT NULL,
+    file_url      TEXT NOT NULL,
+    content_type  VARCHAR(100),
+    size          INTEGER,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_comment_attachments_comment ON purchase_order_comment_attachments(comment_id);
+
 -- ---------------------------------------------------------
 -- 6. Purchase Order Line Items
 -- ---------------------------------------------------------
@@ -211,6 +223,18 @@ CREATE TABLE IF NOT EXISTS purchase_order_item_comments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_po_item_comments_item ON purchase_order_item_comments(purchase_order_item_id);
+
+CREATE TABLE IF NOT EXISTS purchase_order_item_comment_attachments (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    comment_id    UUID NOT NULL REFERENCES purchase_order_item_comments(id) ON DELETE CASCADE,
+    file_name     VARCHAR(255) NOT NULL,
+    file_url      TEXT NOT NULL,
+    content_type  VARCHAR(100),
+    size          INTEGER,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_item_comment_attachments_comment ON purchase_order_item_comment_attachments(comment_id);
 
 -- ---------------------------------------------------------
 -- 6b. Per-vendor container lead time (days from payment/order
