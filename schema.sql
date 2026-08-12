@@ -272,6 +272,8 @@ ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS per_diem NUMERIC(14,2);
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS country_of_origin VARCHAR(120);
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS receiving_closure_notes TEXT;
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS factory_credit_needed TEXT;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS trucker_email VARCHAR(255);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS last_notified_trucker_email VARCHAR(255);
 
 CREATE TABLE IF NOT EXISTS purchase_order_item_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
