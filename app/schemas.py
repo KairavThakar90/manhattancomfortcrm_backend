@@ -188,6 +188,7 @@ class ContainerOut(BaseModel):
     # Lifecycle Fields
     date_dropped_off: Optional[datetime] = None
     door: Optional[str] = None
+    trucker_email: Optional[str] = None
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
@@ -256,6 +257,7 @@ class ContainerDetailOut(BaseModel):
     # Lifecycle Fields
     date_dropped_off: Optional[datetime] = None
     door: Optional[str] = None
+    trucker_email: Optional[str] = None
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
@@ -323,6 +325,7 @@ class ContainerUpdate(BaseModel):
     country_of_origin: Optional[str] = None
     receiving_closure_notes: Optional[str] = None
     factory_credit_needed: Optional[str] = None
+    trucker_email: Optional[str] = None
 
 
 class ContainerAddItems(BaseModel):

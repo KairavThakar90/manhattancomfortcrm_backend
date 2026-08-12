@@ -277,6 +277,8 @@ class ShippingContainer(Base):
     country_of_origin = Column(String(120))
     receiving_closure_notes = Column(Text)
     factory_credit_needed = Column(Text)
+    trucker_email = Column(String(255))
+    last_notified_trucker_email = Column(String(255))
 
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
