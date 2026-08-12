@@ -109,17 +109,13 @@ async def send_tag_notification(
         message_kwargs["cc"] = cc_emails
         
     if attachments:
-        from fastapi import UploadFile
-        from starlette.datastructures import Headers
-        import io
-        
         formatted_attachments = []
         for att in attachments:
-            file_content = io.BytesIO(att["content"])
-            headers = Headers({"content-type": att.get("content_type") or "application/octet-stream"})
-            u = UploadFile(filename=att["file_name"], file=file_content, headers=headers)
-            formatted_attachments.append(u)
-            
+            formatted_attachments.append({
+                "file": att["content"],
+                "filename": att["file_name"],
+                "mime_type": att.get("content_type") or "application/octet-stream"
+            })
         message_kwargs["attachments"] = formatted_attachments
 
     message = MessageSchema(**message_kwargs)
@@ -130,6 +126,9 @@ async def send_tag_notification(
         logger.info(f"Sent notification email to TO: {to_email}, CC: {cc_emails}")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
+        import traceback
+        with open("email_error.txt", "a") as f:
+            f.write(traceback.format_exc() + "\n")
 
 async def send_welcome_email(email_to: str, password: str, login_link: str, first_name: str = ""):
     if not settings.SMTP_USER or not settings.SMTP_PASS:

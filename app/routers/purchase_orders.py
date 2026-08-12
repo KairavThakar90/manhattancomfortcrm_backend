@@ -489,8 +489,10 @@ async def add_po_comment(
             tagged_users = []
         else:
             tagged_users = json.loads(tagged_user_ids)
+            if not isinstance(tagged_users, list):
+                tagged_users = [tagged_users]
     except Exception:
-        tagged_users = []
+        tagged_users = [uid.strip() for uid in tagged_user_ids.split(",") if uid.strip()]
 
     # Parse parent_id if it's "null" string
     if parent_id == "null" or not parent_id:
@@ -704,8 +706,10 @@ async def add_po_item_comment(
             tagged_users = []
         else:
             tagged_users = json.loads(tagged_user_ids)
+            if not isinstance(tagged_users, list):
+                tagged_users = [tagged_users]
     except Exception:
-        tagged_users = []
+        tagged_users = [uid.strip() for uid in tagged_user_ids.split(",") if uid.strip()]
 
     if parent_id == "null" or not parent_id:
         parent_uuid = None
