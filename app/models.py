@@ -27,6 +27,11 @@ class User(Base):
     phone = Column(String(50), nullable=True)
     payment_terms = Column(String(255), nullable=True)
     container_lead_time_days = Column(Integer, nullable=True)
+    # Notification Preferences
+    notify_new_user = Column(Boolean, default=False)
+    notify_trucker_email = Column(Boolean, default=False)
+    notify_invoice_delayed = Column(Boolean, default=False)
+    notify_shipment_delayed = Column(Boolean, default=False)
     
     is_active = Column(Boolean, default=True, nullable=False)
     otp_code = Column(String(10), nullable=True)
@@ -149,6 +154,10 @@ class PurchaseOrder(Base):
     currency = Column(String(10), default="USD")
     notes = Column(Text)
     status = Column(String(50), nullable=True)
+    
+    # Delay Tracking
+    delay_reason = Column(Text, nullable=True)
+    delay_notification_sent = Column(Boolean, default=False)
     
     # Warehouse Info (ForeignKey to Warehouse table)
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))

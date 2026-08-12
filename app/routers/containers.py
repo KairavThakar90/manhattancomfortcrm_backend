@@ -705,11 +705,16 @@ async def update_container(
     if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
         from app.services.email_service import send_container_emptied_notification
         formatted_date = container.date_emptied.strftime('%Y-%m-%d %H:%M:%S')
+        
+        admins = db.query(models.User).filter(models.User.role == "admin", models.User.notify_trucker_email == True).all()
+        admin_emails = [a.email for a in admins if a.email]
+        
         background_tasks.add_task(
             send_container_emptied_notification,
-            container.trucker_email,
-            container.container_name,
-            formatted_date
+            email_to=container.trucker_email,
+            container_name=container.container_name,
+            date_emptied=formatted_date,
+            cc_emails=admin_emails
         )
         container.last_notified_trucker_email = container.trucker_email
         db.commit()

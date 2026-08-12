@@ -438,10 +438,11 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
 @router.post("/{po_id}/comments", response_model=POCommentOut)
 async def add_po_comment(
     po_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
-    comment: str = Form(...),
+    comment: Optional[str] = Form(None),
     parent_id: Optional[str] = Form(None),
-    tagged_user_ids: str = Form("[]"),
+    tagged_user_ids: Optional[str] = Form(None),
     files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
@@ -467,8 +468,27 @@ async def add_po_comment(
         if str(po.vendor_id) != str(current_user.vendor_id):
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
             
+    if not comment:
+        try:
+            body = await request.json()
+            comment = body.get("comment")
+            parent_id = body.get("parent_id")
+            tagged_users_list = body.get("tagged_user_ids", [])
+            if isinstance(tagged_users_list, list):
+                tagged_user_ids = json.dumps(tagged_users_list)
+            else:
+                tagged_user_ids = str(tagged_users_list)
+        except Exception:
+            pass
+
+    if not comment:
+        raise HTTPException(status_code=400, detail="comment field is required")
+
     try:
-        tagged_users = json.loads(tagged_user_ids)
+        if not tagged_user_ids or tagged_user_ids == "null":
+            tagged_users = []
+        else:
+            tagged_users = json.loads(tagged_user_ids)
     except Exception:
         tagged_users = []
 
@@ -636,10 +656,11 @@ def get_po_item_comments(
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
 async def add_po_item_comment(
     item_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
-    comment: str = Form(...),
+    comment: Optional[str] = Form(None),
     parent_id: Optional[str] = Form(None),
-    tagged_user_ids: str = Form("[]"),
+    tagged_user_ids: Optional[str] = Form(None),
     files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
@@ -662,8 +683,27 @@ async def add_po_item_comment(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
         
+    if not comment:
+        try:
+            body = await request.json()
+            comment = body.get("comment")
+            parent_id = body.get("parent_id")
+            tagged_users_list = body.get("tagged_user_ids", [])
+            if isinstance(tagged_users_list, list):
+                tagged_user_ids = json.dumps(tagged_users_list)
+            else:
+                tagged_user_ids = str(tagged_users_list)
+        except Exception:
+            pass
+
+    if not comment:
+        raise HTTPException(status_code=400, detail="comment field is required")
+        
     try:
-        tagged_users = json.loads(tagged_user_ids)
+        if not tagged_user_ids or tagged_user_ids == "null":
+            tagged_users = []
+        else:
+            tagged_users = json.loads(tagged_user_ids)
     except Exception:
         tagged_users = []
 

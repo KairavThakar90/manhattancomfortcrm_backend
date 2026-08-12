@@ -43,6 +43,19 @@ class UserOut(BaseModel):
     phone: Optional[str] = None
     payment_terms: Optional[str] = None
     container_lead_time_days: Optional[int] = None
+    
+    # Notification Preferences
+    notify_new_user: bool = False
+    notify_trucker_email: bool = False
+    notify_invoice_delayed: bool = False
+    notify_shipment_delayed: bool = False
+
+
+class UserUpdate(BaseModel):
+    notify_new_user: Optional[bool] = None
+    notify_trucker_email: Optional[bool] = None
+    notify_invoice_delayed: Optional[bool] = None
+    notify_shipment_delayed: Optional[bool] = None
 
 
 class Token(BaseModel):
@@ -121,6 +134,8 @@ class VendorSummary(BaseModel):
     id: uuid.UUID
     sellercloud_vendor_id: Optional[int] = None
     name: str
+    container_lead_time_days: Optional[int] = None
+
 
 
 class VendorUpdate(BaseModel):
@@ -169,6 +184,7 @@ class ContainerSummary(BaseModel):
     container_name: Optional[str] = None
     estimated_arrival_date: Optional[datetime] = None
     received_date: Optional[datetime] = None
+    date_emptied: Optional[datetime] = None
     qty_in_container: Optional[int] = None
 
 class ContainerAttachmentOut(BaseModel):
@@ -424,6 +440,7 @@ class PurchaseOrderItemOut(BaseModel):
                         container_name=link.container.container_name,
                         estimated_arrival_date=link.container.estimated_arrival_date,
                         received_date=link.container.received_date,
+                        date_emptied=link.container.date_emptied,
                         qty_in_container=link.qty_in_container
                     ))
             instance.containers = containers
@@ -485,6 +502,10 @@ class POItemCommentOut(BaseModel):
 class POContainerDetailOut(BaseModel):
     id: uuid.UUID
     sellercloud_container_id: Optional[int] = None
+    container_name: Optional[str] = None
+    estimated_arrival_date: Optional[datetime] = None
+    received_date: Optional[datetime] = None
+    date_emptied: Optional[datetime] = None
 
 class WarehouseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -544,14 +565,18 @@ class PurchaseOrderOut(BaseModel):
     total_qty_remaining: Optional[int] = None  # Calculated: total_qty_ordered - total_qty_received
     total_qty_in_container: Optional[int] = None
     total_comments_count: int = 0
+    delay_reason: Optional[str] = None
     
-    # Container information
+    # Nested Information
     container_names: List[str] = []  # All unique container names for this PO
     container_details: List[POContainerDetailOut] = []  # Detailed container info
     
     # Status flags
     is_invoice_delayed: Optional[str] = None  # "Yes" or "No"
     is_container_overdue: Optional[str] = None  # "Yes" or "No"
+    
+    # Delay Details (Per Container)
+    delay_details: Optional[Dict[str, Any]] = Field(default_factory=dict)
     
     @classmethod
     def model_validate(cls, obj, **kwargs):
@@ -593,7 +618,11 @@ class PurchaseOrderOut(BaseModel):
                         if str(container.id) not in container_details_map:
                             container_details_map[str(container.id)] = {
                                 "id": container.id,
-                                "sellercloud_container_id": container.sellercloud_container_id
+                                "sellercloud_container_id": container.sellercloud_container_id,
+                                "container_name": container.container_name,
+                                "estimated_arrival_date": container.estimated_arrival_date,
+                                "received_date": container.received_date,
+                                "date_emptied": container.date_emptied
                             }
             instance.container_names = sorted(list(container_names_set))
             instance.container_details = [POContainerDetailOut(**detail) for detail in container_details_map.values()]
@@ -620,12 +649,61 @@ class PurchaseOrderOut(BaseModel):
         else:
             instance.is_invoice_delayed = "No"
         
-        # 2. Check if container is overdue based on PO lead time (not vendor lead time)
-        if instance.invoice_date and instance.container_lead_time_days:
-            expected_arrival = instance.invoice_date.date() + timedelta(days=instance.container_lead_time_days)
-            instance.is_container_overdue = "Yes" if expected_arrival < today else "No"
+        # 2. Check container delays individually
+        instance.delay_details = {
+            "arrived_containers": [],
+            "delayed_containers": [],
+            "unassigned_delayed_items": False
+        }
+        
+        if instance.invoice_date:
+            po_lead_time = instance.container_lead_time_days
+            if not po_lead_time and hasattr(instance, 'vendor') and instance.vendor:
+                po_lead_time = instance.vendor.container_lead_time_days
+            
+            po_expected_arrival = None
+            if po_lead_time:
+                po_expected_arrival = instance.invoice_date.date() + timedelta(days=po_lead_time)
+                
+            has_delayed_containers = False
+            
+            # Check containers
+            if hasattr(instance, 'container_details') and instance.container_details:
+                for container in instance.container_details:
+                    # Is it arrived?
+                    if container.received_date or container.date_emptied:
+                        instance.delay_details["arrived_containers"].append(container.container_name or str(container.sellercloud_container_id))
+                        continue
+                        
+                    # Not arrived. Is it delayed?
+                    container_delayed = False
+                    if container.estimated_arrival_date:
+                        if container.estimated_arrival_date.date() < today:
+                            container_delayed = True
+                    elif po_expected_arrival:
+                        if po_expected_arrival < today:
+                            container_delayed = True
+                            
+                    if container_delayed:
+                        instance.delay_details["delayed_containers"].append(container.container_name or str(container.sellercloud_container_id))
+                        has_delayed_containers = True
+                        
+                # Check for unassigned items if PO lead time has passed
+                if po_expected_arrival and po_expected_arrival < today:
+                    items_in_containers = sum(1 for item in instance.items if hasattr(item, 'container_names') and item.container_names)
+                    if items_in_containers < len(instance.items):
+                        instance.delay_details["unassigned_delayed_items"] = True
+                        has_delayed_containers = True
+                        
+            else:
+                # No containers attached. Are we past PO lead time?
+                if po_expected_arrival and po_expected_arrival < today:
+                    instance.delay_details["unassigned_delayed_items"] = True
+                    has_delayed_containers = True
+
+            instance.is_container_overdue = "Yes" if has_delayed_containers else "No"
         else:
-            instance.is_container_overdue = "No"  # No invoice or no lead time set
+            instance.is_container_overdue = "No"  # No invoice
             
         # 3. Dynamic status calculation based on received quantities
         qty_ord = instance.total_qty_ordered or 0
@@ -707,3 +785,4 @@ class UserActivityLogOut(BaseModel):
 
 class POStatusUpdate(BaseModel):
     status: Optional[str] = Field(None, description="E.g. NOT_STARTED, IN_PRODUCTION, DELAYED, COMPLETED, NOT_PLANNED, PLANNED, PARTIALLY_SHIPPED, SHIPPED")
+    delay_reason: Optional[str] = None
