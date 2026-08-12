@@ -5,7 +5,7 @@ from sqlalchemy import or_
 from app.database import get_db
 from app import models
 from app.schemas import PurchaseOrderOut
-from app.services.email_service import send_delay_notification, send_weekly_digest
+from app.services.email_service import send_aggregated_delay_notification
 from app.config import settings
 import os
 
@@ -38,6 +38,9 @@ async def check_delays(
     invoice_delayed_digest = []
     shipment_delayed_digest = []
     
+    instant_invoice_alerts = []
+    instant_shipment_alerts = []
+    
     # Pre-fetch users for notifications
     users = db.query(models.User).filter(models.User.is_active == True).all()
     invoice_subscribers = [u.email for u in users if u.notify_invoice_delayed and u.email]
@@ -62,16 +65,10 @@ async def check_delays(
             # 1. Instant Notification Check
             if not po.delay_notification_sent:
                 po.delay_notification_sent = True
-                
-                recipients = invoice_subscribers if is_invoice_delayed else shipment_subscribers
-                if recipients:
-                    background_tasks.add_task(
-                        send_delay_notification,
-                        emails=recipients,
-                        po_number=str(po.order_number or po.sellercloud_po_id),
-                        delay_type=delay_type,
-                        delay_details=po_out.delay_details
-                    )
+                if is_invoice_delayed:
+                    instant_invoice_alerts.append({"po": po, "delay_details": po_out.delay_details})
+                else:
+                    instant_shipment_alerts.append({"po": po, "delay_details": po_out.delay_details})
             
             # 2. Weekly Digest Collection Check (Missing Reason)
             if weekly_digest and not po.delay_reason:
@@ -82,13 +79,24 @@ async def check_delays(
 
     db.commit()
 
-    # 3. Send Weekly Digest Email
+    # 3. Send Aggregated Instant Email
+    if (instant_invoice_alerts or instant_shipment_alerts) and digest_subscribers:
+        background_tasks.add_task(
+            send_aggregated_delay_notification,
+            emails=digest_subscribers,
+            invoice_delayed_pos=instant_invoice_alerts,
+            shipment_delayed_pos=instant_shipment_alerts,
+            is_weekly_digest=False
+        )
+
+    # 4. Send Weekly Digest Email
     if weekly_digest and (invoice_delayed_digest or shipment_delayed_digest) and digest_subscribers:
         background_tasks.add_task(
-            send_weekly_digest,
+            send_aggregated_delay_notification,
             emails=digest_subscribers,
             invoice_delayed_pos=invoice_delayed_digest,
-            shipment_delayed_pos=shipment_delayed_digest
+            shipment_delayed_pos=shipment_delayed_digest,
+            is_weekly_digest=True
         )
 
     return {

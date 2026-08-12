@@ -309,16 +309,23 @@ async def send_delay_notification(emails: list, po_number: str, delay_type: str,
         logger.error(f"Failed to send delay notification: {e}")
 
 
-async def send_weekly_digest(emails: list, invoice_delayed_pos: list, shipment_delayed_pos: list):
+async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: list, shipment_delayed_pos: list, is_weekly_digest: bool = False):
     if not settings.SMTP_USER or not settings.SMTP_PASS or not emails:
         return
 
-    subject = "Weekly Digest: Delayed Purchase Orders Requiring Action"
+    if is_weekly_digest:
+        subject = "Weekly Digest: Delayed Purchase Orders Requiring Action"
+        header_text = "Weekly Delayed PO Digest"
+        description_text = "The following Purchase Orders are currently delayed and <strong>do not have a delay reason provided:</strong>"
+    else:
+        subject = "ACTION REQUIRED: New Delayed Purchase Orders"
+        header_text = "New Delayed Purchase Orders"
+        description_text = "The following Purchase Orders have just been flagged as delayed. Please log in and provide a Delay Reason as soon as possible:"
     
     invoice_list_html = ""
     for item in invoice_delayed_pos:
         po = item.get("po") if isinstance(item, dict) else item
-        po_num = po.order_number or po.sellercloud_po_id
+        po_num = getattr(po, "order_number", None) or po.sellercloud_po_id
         invoice_list_html += f"<li>PO #{po_num}</li>"
     if not invoice_list_html:
         invoice_list_html = "<li>None</li>"
@@ -327,7 +334,7 @@ async def send_weekly_digest(emails: list, invoice_delayed_pos: list, shipment_d
     for item in shipment_delayed_pos:
         po = item.get("po") if isinstance(item, dict) else item
         details = item.get("delay_details", {}) if isinstance(item, dict) else {}
-        po_num = po.order_number or po.sellercloud_po_id
+        po_num = getattr(po, "order_number", None) or po.sellercloud_po_id
         
         shipment_list_html += f"<li><strong>PO #{po_num}</strong>"
         
@@ -347,8 +354,8 @@ async def send_weekly_digest(emails: list, invoice_delayed_pos: list, shipment_d
 
     html = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
-        <h2 style="color: #333;">Weekly Delayed PO Digest</h2>
-        <p>The following Purchase Orders are currently delayed and <strong>do not have a delay reason provided:</strong></p>
+        <h2 style="color: #333;">{header_text}</h2>
+        <p>{description_text}</p>
         
         <h3 style="color: #d35400;">Invoice Delayed</h3>
         <ul>{invoice_list_html}</ul>

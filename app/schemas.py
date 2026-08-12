@@ -417,6 +417,7 @@ class PurchaseOrderItemOut(BaseModel):
     expected_delivery_date: Optional[datetime] = None
     containers: List[ContainerSummary] = []  # Containers this item is in
     comments: List['POItemCommentOut'] = []  # Added item comments
+    comments_count: int = 0                  # Computed comment count
     
     @classmethod
     def model_validate(cls, obj, **kwargs):
@@ -428,6 +429,9 @@ class PurchaseOrderItemOut(BaseModel):
         qty_rec = instance.qty_received or 0
         qty_in_cont = instance.qty_in_container or 0
         instance.qty_remaining = max(0, qty_ord - max(qty_rec, qty_in_cont))
+        
+        # Calculate comment count
+        instance.comments_count = len(instance.comments) if hasattr(instance, 'comments') and instance.comments else 0
         
         # Load containers from the link table
         if hasattr(obj, 'container_links') and obj.container_links:
@@ -592,6 +596,16 @@ class PurchaseOrderOut(BaseModel):
         
         # Now validate the PO, but replace items with our pre-validated ones
         instance = super().model_validate(obj, **kwargs)
+        
+        # Sort items based on the latest comment date (descending), items with no comments go last
+        def get_latest_comment_date(item):
+            if hasattr(item, 'comments') and item.comments:
+                dates = [c.created_at for c in item.comments if c.created_at]
+                if dates:
+                    return max(dates)
+            return datetime.min.replace(tzinfo=timezone.utc)
+            
+        validated_items.sort(key=get_latest_comment_date, reverse=True)
         instance.items = validated_items
         
         # Extract order number from purchase_title (e.g., "Created for Order# 6962293" -> "6962293")
