@@ -171,6 +171,13 @@ class ContainerSummary(BaseModel):
     received_date: Optional[datetime] = None
     qty_in_container: Optional[int] = None
 
+class ContainerAttachmentOut(BaseModel):
+    id: uuid.UUID
+    file_name: str
+    file_url: str
+    content_type: Optional[str] = None
+    size: Optional[int] = None
+    created_at: Optional[datetime] = None
 
 class ContainerOut(BaseModel):
     """Container list item — includes summary counts and received status."""
@@ -204,6 +211,7 @@ class ContainerOut(BaseModel):
     total_qty_in_container: Optional[int] = None
     total_qty_received: Optional[int] = None
     unique_pos: Optional[int] = None
+    attachments: List[ContainerAttachmentOut] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -270,6 +278,7 @@ class ContainerDetailOut(BaseModel):
 
     summary: dict = {}
     items: List[ContainerDetailItemOut] = []
+    attachments: List[ContainerAttachmentOut] = []
 
     @computed_field
     def sellercloud_link(self) -> Optional[str]:

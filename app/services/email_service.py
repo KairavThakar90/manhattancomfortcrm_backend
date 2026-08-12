@@ -109,19 +109,17 @@ async def send_tag_notification(
         message_kwargs["cc"] = cc_emails
         
     if attachments:
+        from fastapi import UploadFile
+        from starlette.datastructures import Headers
+        import io
+        
         formatted_attachments = []
         for att in attachments:
-            mime_type = "application"
-            mime_subtype = "octet-stream"
-            if att.get("content_type") and "/" in att["content_type"]:
-                mime_type, mime_subtype = att["content_type"].split("/", 1)
-                
-            formatted_attachments.append({
-                "file": att["content"],
-                "filename": att["file_name"],
-                "mime_type": mime_type,
-                "mime_subtype": mime_subtype
-            })
+            file_content = io.BytesIO(att["content"])
+            headers = Headers({"content-type": att.get("content_type") or "application/octet-stream"})
+            u = UploadFile(filename=att["file_name"], file=file_content, headers=headers)
+            formatted_attachments.append(u)
+            
         message_kwargs["attachments"] = formatted_attachments
 
     message = MessageSchema(**message_kwargs)

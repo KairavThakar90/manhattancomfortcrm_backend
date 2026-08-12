@@ -496,10 +496,22 @@ async def add_po_comment(
     uploaded_attachments = []
     email_attachments = []
     
-    # Check sizes first
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    # Check sizes and types first
     for f in files:
         if f.size and f.size > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, and CSVs are permitted.")
             
     for f in files:
         if not f.filename:
@@ -596,7 +608,17 @@ def get_po_item_comments(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
+    import uuid
+    if item_id.isdigit():
+        filter_clause = models.PurchaseOrderItem.sellercloud_item_id == int(item_id)
+    else:
+        try:
+            item_uuid = uuid.UUID(item_id)
+            filter_clause = models.PurchaseOrderItem.id == item_uuid
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Item ID format. Must be a UUID or SellerCloud integer ID.")
+            
+    item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
  
@@ -627,7 +649,16 @@ async def add_po_item_comment(
     from app.config import settings
     from app.services.gcs_service import upload_file_to_gcs
     
-    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
+    if item_id.isdigit():
+        filter_clause = models.PurchaseOrderItem.sellercloud_item_id == int(item_id)
+    else:
+        try:
+            item_uuid = uuid.UUID(item_id)
+            filter_clause = models.PurchaseOrderItem.id == item_uuid
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Item ID format. Must be a UUID or SellerCloud integer ID.")
+            
+    item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
         
@@ -659,9 +690,21 @@ async def add_po_item_comment(
     uploaded_attachments = []
     email_attachments = []
     
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
     for f in files:
         if f.size and f.size > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, and CSVs are permitted.")
             
     for f in files:
         if not f.filename:
