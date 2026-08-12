@@ -26,5 +26,7 @@ def recalculate_po_shipment_status(db: Session, po_id: str):
             po.status = "SHIPPED"
         else:
             po.status = "PARTIALLY_SHIPPED"
+    else:
+        po.status = None
             
     db.commit()

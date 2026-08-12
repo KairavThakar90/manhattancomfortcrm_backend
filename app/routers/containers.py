@@ -4,7 +4,7 @@ Container API endpoints
 from typing import Optional, List
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -17,6 +17,7 @@ from app.schemas import (
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
+from app.services.gcs_service import upload_file_to_gcs
 
 import uuid
 
@@ -84,7 +85,10 @@ def list_containers(
     - `total_qty_received` — total units received from SC
     - `unique_pos` — number of distinct POs in the container
     """
-    query = db.query(models.ShippingContainer).options(joinedload(models.ShippingContainer.warehouse))
+    query = db.query(models.ShippingContainer).options(
+        joinedload(models.ShippingContainer.warehouse),
+        joinedload(models.ShippingContainer.attachments)
+    )
 
     # Received / not-received filter
     if received is True:
@@ -200,6 +204,7 @@ def list_containers(
                 total_qty_in_container=total_qty,
                 total_qty_received=total_received,
                 unique_pos=len(unique_po_ids),
+                attachments=ctr.attachments,
             )
         )
 
@@ -596,13 +601,22 @@ def create_container(
 # PUT /containers/{container_id}
 # ---------------------------------------------------------------------------
 @router.put("/{container_id}")
-def update_container(
+async def update_container(
     container_id: str,
-    update_data: ContainerUpdate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
+    container_data: Optional[str] = Form(None),
+    files: Optional[List[UploadFile]] = File(None)
 ):
+    import json
+    if container_data:
+        try:
+            update_data = ContainerUpdate(**json.loads(container_data))
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Invalid JSON in container_data: {e}")
+    else:
+        update_data = ContainerUpdate()
     """
     Update a container's name, estimated arrival date, or received date.
     Syncs the update to SellerCloud and saves it locally.
@@ -648,6 +662,41 @@ def update_container(
         if field in update_dict:
             setattr(container, field, update_dict[field])
 
+    # Process files
+    uploaded_attachments = []
+    if files:
+        allowed_types = [
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/csv"
+        ]
+        for f in files:
+            if f.size and f.size > 5 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            if f.filename and f.content_type:
+                if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                    raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}.")
+                    
+        for f in files:
+            if not f.filename:
+                continue
+            file_bytes = await f.read()
+            if len(file_bytes) > 5 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+            att_model = models.ShippingContainerAttachment(
+                shipping_container_id=container.id,
+                file_name=f.filename,
+                file_url=file_url,
+                content_type=f.content_type,
+                size=len(file_bytes)
+            )
+            db.add(att_model)
+            uploaded_attachments.append(att_model)
+
     container.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(container)
@@ -656,11 +705,16 @@ def update_container(
     if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
         from app.services.email_service import send_container_emptied_notification
         formatted_date = container.date_emptied.strftime('%Y-%m-%d %H:%M:%S')
+        
+        admins = db.query(models.User).filter(models.User.role == "admin", models.User.notify_trucker_email == True).all()
+        admin_emails = [a.email for a in admins if a.email]
+        
         background_tasks.add_task(
             send_container_emptied_notification,
-            container.trucker_email,
-            container.container_name,
-            formatted_date
+            email_to=container.trucker_email,
+            container_name=container.container_name,
+            date_emptied=formatted_date,
+            cc_emails=admin_emails
         )
         container.last_notified_trucker_email = container.trucker_email
         db.commit()
@@ -675,7 +729,16 @@ def update_container(
             "container_name": container.container_name,
             "estimated_arrival_date": container.estimated_arrival_date,
             "received_date": container.received_date,
-            "sellercloud_container_id": container.sellercloud_container_id
+            "sellercloud_container_id": container.sellercloud_container_id,
+            "attachments": [
+                {
+                    "id": str(att.id),
+                    "file_name": att.file_name,
+                    "file_url": att.file_url,
+                    "content_type": att.content_type,
+                    "size": att.size
+                } for att in container.attachments
+            ]
         }
     }
 
@@ -806,7 +869,8 @@ def get_container_details(
             joinedload(models.ShippingContainer.item_links)
             .joinedload(models.PurchaseOrderItemContainer.item)
             .joinedload(models.PurchaseOrderItem.purchase_order)
-            .joinedload(models.PurchaseOrder.vendor)
+            .joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.ShippingContainer.attachments)
         )
         .first()
     )
@@ -873,7 +937,113 @@ def get_container_details(
             "pending_items": len(items_out) - fully_received_count,
         },
         items=items_out,
+        attachments=container.attachments,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/attachments
+# ---------------------------------------------------------------------------
+@router.post("/{container_id}/attachments")
+async def add_container_attachments(
+    container_id: str,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Upload one or more files to a container.
+    """
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    # Check sizes and types first
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, Excel docs, and CSVs are permitted.")
+            
+    uploaded_attachments = []
+    
+    for f in files:
+        if not f.filename:
+            continue
+        # Read bytes
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.ShippingContainerAttachment(
+            shipping_container_id=container.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        
+    if uploaded_attachments:
+        db.commit()
+        
+    log_activity(db, action="ADD_CONTAINER_ATTACHMENTS", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details={"files_uploaded": len(uploaded_attachments)})
+    
+    return {
+        "success": True, 
+        "message": f"Successfully uploaded {len(uploaded_attachments)} files",
+        "attachments": [
+            {
+                "id": str(att.id),
+                "file_name": att.file_name,
+                "file_url": att.file_url,
+                "content_type": att.content_type,
+                "size": att.size
+            } for att in uploaded_attachments
+        ]
+    }
+
+# ---------------------------------------------------------------------------
+# DELETE /containers/attachments/{attachment_id}
+# ---------------------------------------------------------------------------
+@router.delete("/attachments/{attachment_id}")
+def delete_container_attachment(
+    attachment_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Delete a container attachment.
+    """
+    try:
+        att_uuid = uuid.UUID(attachment_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid attachment ID format")
+        
+    attachment = db.query(models.ShippingContainerAttachment).filter(models.ShippingContainerAttachment.id == att_uuid).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+        
+    container_id = str(attachment.shipping_container_id)
+    db.delete(attachment)
+    db.commit()
+    
+    log_activity(db, action="DELETE_CONTAINER_ATTACHMENT", user_id=current_user.id, entity_type="CONTAINER", entity_id=container_id, details={"attachment_id": attachment_id})
+    return {"success": True, "message": "Attachment deleted successfully"}
+
 
 
 # ---------------------------------------------------------------------------

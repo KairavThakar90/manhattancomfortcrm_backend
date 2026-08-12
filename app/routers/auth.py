@@ -11,11 +11,11 @@ from google.auth.transport import requests as google_requests
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
-from app.services.email_service import send_welcome_email, send_2fa_email
+from app.services.email_service import send_welcome_email, send_2fa_email, send_admin_new_user_notification
 from app.services.activity_service import log_activity
 from app.config import settings
 from app.schemas import (
-    Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, 
+    Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate,
     UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest
 )
 
@@ -345,7 +345,46 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
         first_name=user_data.first_name
     )
     
+    # Send notification to admins in background
+    admins = db.query(models.User).filter(models.User.role == "admin", models.User.notify_new_user == True).all()
+    admin_emails = [a.email for a in admins if a.email]
+    if admin_emails:
+        background_tasks.add_task(
+            send_admin_new_user_notification,
+            admin_emails=admin_emails,
+            new_user_name=full_name,
+            new_user_email=user_data.email,
+            new_user_role=user_data.role
+        )
+    
     return UserOut.model_validate(new_user)
+
+@router.put("/users/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: str,
+    user_update: UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Update a user's notification preferences.
+    Requires admin privileges.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized. Admin only.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    update_data = user_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(user, key, value)
+        
+    db.commit()
+    db.refresh(user)
+    
+    return UserOut.model_validate(user)
 
 
 @router.put("/update-password")

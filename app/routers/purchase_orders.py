@@ -4,7 +4,7 @@ import csv
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, cast, String
@@ -441,10 +441,11 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
 @router.post("/{po_id}/comments", response_model=POCommentOut)
 async def add_po_comment(
     po_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
-    comment: str = Form(...),
+    comment: Optional[str] = Form(None),
     parent_id: Optional[str] = Form(None),
-    tagged_user_ids: str = Form("[]"),
+    tagged_user_ids: Optional[str] = Form(None),
     files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
@@ -461,9 +462,31 @@ async def add_po_comment(
     if current_user.role == "vendor":
         if str(po.vendor_id) != str(current_user.vendor_id):
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
+<<<<<<< HEAD
+=======
+            
+    if not comment:
+        try:
+            body = await request.json()
+            comment = body.get("comment")
+            parent_id = body.get("parent_id")
+            tagged_users_list = body.get("tagged_user_ids", [])
+            if isinstance(tagged_users_list, list):
+                tagged_user_ids = json.dumps(tagged_users_list)
+            else:
+                tagged_user_ids = str(tagged_users_list)
+        except Exception:
+            pass
+
+    if not comment:
+        raise HTTPException(status_code=400, detail="comment field is required")
+>>>>>>> origin/main
 
     try:
-        tagged_users = json.loads(tagged_user_ids)
+        if not tagged_user_ids or tagged_user_ids == "null":
+            tagged_users = []
+        else:
+            tagged_users = json.loads(tagged_user_ids)
     except Exception:
         tagged_users = []
 
@@ -491,10 +514,22 @@ async def add_po_comment(
     uploaded_attachments = []
     email_attachments = []
     
-    # Check sizes first
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    # Check sizes and types first
     for f in files:
         if f.size and f.size > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, and CSVs are permitted.")
             
     for f in files:
         if not f.filename:
@@ -591,7 +626,17 @@ def get_po_item_comments(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
+    import uuid
+    if item_id.isdigit():
+        filter_clause = models.PurchaseOrderItem.sellercloud_item_id == int(item_id)
+    else:
+        try:
+            item_uuid = uuid.UUID(item_id)
+            filter_clause = models.PurchaseOrderItem.id == item_uuid
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Item ID format. Must be a UUID or SellerCloud integer ID.")
+            
+    item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
@@ -610,10 +655,11 @@ def get_po_item_comments(
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
 async def add_po_item_comment(
     item_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
-    comment: str = Form(...),
+    comment: Optional[str] = Form(None),
     parent_id: Optional[str] = Form(None),
-    tagged_user_ids: str = Form("[]"),
+    tagged_user_ids: Optional[str] = Form(None),
     files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
@@ -623,12 +669,40 @@ async def add_po_item_comment(
     from app.config import settings
     from app.services.gcs_service import upload_file_to_gcs
     
-    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_id).first()
+    if item_id.isdigit():
+        filter_clause = models.PurchaseOrderItem.sellercloud_item_id == int(item_id)
+    else:
+        try:
+            item_uuid = uuid.UUID(item_id)
+            filter_clause = models.PurchaseOrderItem.id == item_uuid
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Item ID format. Must be a UUID or SellerCloud integer ID.")
+            
+    item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
         
+    if not comment:
+        try:
+            body = await request.json()
+            comment = body.get("comment")
+            parent_id = body.get("parent_id")
+            tagged_users_list = body.get("tagged_user_ids", [])
+            if isinstance(tagged_users_list, list):
+                tagged_user_ids = json.dumps(tagged_users_list)
+            else:
+                tagged_user_ids = str(tagged_users_list)
+        except Exception:
+            pass
+
+    if not comment:
+        raise HTTPException(status_code=400, detail="comment field is required")
+        
     try:
-        tagged_users = json.loads(tagged_user_ids)
+        if not tagged_user_ids or tagged_user_ids == "null":
+            tagged_users = []
+        else:
+            tagged_users = json.loads(tagged_user_ids)
     except Exception:
         tagged_users = []
 
@@ -655,9 +729,21 @@ async def add_po_item_comment(
     uploaded_attachments = []
     email_attachments = []
     
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
     for f in files:
         if f.size and f.size > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, and CSVs are permitted.")
             
     for f in files:
         if not f.filename:

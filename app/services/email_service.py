@@ -109,19 +109,17 @@ async def send_tag_notification(
         message_kwargs["cc"] = cc_emails
         
     if attachments:
+        from fastapi import UploadFile
+        from starlette.datastructures import Headers
+        import io
+        
         formatted_attachments = []
         for att in attachments:
-            mime_type = "application"
-            mime_subtype = "octet-stream"
-            if att.get("content_type") and "/" in att["content_type"]:
-                mime_type, mime_subtype = att["content_type"].split("/", 1)
-                
-            formatted_attachments.append({
-                "file": att["content"],
-                "filename": att["file_name"],
-                "mime_type": mime_type,
-                "mime_subtype": mime_subtype
-            })
+            file_content = io.BytesIO(att["content"])
+            headers = Headers({"content-type": att.get("content_type") or "application/octet-stream"})
+            u = UploadFile(filename=att["file_name"], file=file_content, headers=headers)
+            formatted_attachments.append(u)
+            
         message_kwargs["attachments"] = formatted_attachments
 
     message = MessageSchema(**message_kwargs)
@@ -221,3 +219,157 @@ async def send_po_status_update_email(
         await fm.send_message(message)
     except Exception as e:
         logger.error(f"Failed to send PO status update email: {e}")
+
+
+async def send_container_emptied_notification(email_to: str, container_name: str, date_emptied: str, cc_emails: list = None):
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        return
+
+    subject = f"Container Emptied: {container_name}"
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
+        <h2 style="color: #333;">Container Emptied Notification</h2>
+        <p>Container <strong>{container_name}</strong> was emptied on <strong>{date_emptied}</strong>.</p>
+    </div>
+    """
+    
+    message_kwargs = {
+        "subject": subject,
+        "recipients": [email_to],
+        "body": html,
+        "subtype": MessageType.html
+    }
+    if cc_emails:
+        message_kwargs["cc"] = cc_emails
+
+    message = MessageSchema(**message_kwargs)
+    fm = FastMail(conf)
+    try:
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send container emptied notification: {e}")
+
+
+async def send_admin_new_user_notification(admin_emails: list, new_user_name: str, new_user_email: str, new_user_role: str):
+    if not settings.SMTP_USER or not settings.SMTP_PASS or not admin_emails:
+        return
+
+    subject = f"New User Registration: {new_user_name}"
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
+        <h2 style="color: #333;">New User Registration</h2>
+        <p>A new user has just registered on the platform:</p>
+        <ul>
+            <li><strong>Name:</strong> {new_user_name}</li>
+            <li><strong>Email:</strong> {new_user_email}</li>
+            <li><strong>Role:</strong> {new_user_role}</li>
+        </ul>
+    </div>
+    """
+    
+    message = MessageSchema(subject=subject, recipients=admin_emails, body=html, subtype=MessageType.html)
+    fm = FastMail(conf)
+    try:
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send new user admin notification: {e}")
+
+
+async def send_delay_notification(emails: list, po_number: str, delay_type: str, delay_details: dict = None):
+    if not settings.SMTP_USER or not settings.SMTP_PASS or not emails:
+        return
+
+    subject = f"ACTION REQUIRED: PO #{po_number} is {delay_type}"
+    
+    details_html = ""
+    if delay_details and delay_type == "Shipment Delayed":
+        details_html += "<ul style='margin-bottom: 20px;'>"
+        if delay_details.get("arrived_containers"):
+            details_html += "<li><strong>Arrived Containers:</strong> " + ", ".join(delay_details["arrived_containers"]) + "</li>"
+        if delay_details.get("delayed_containers"):
+            details_html += "<li><strong style='color: #dc3545;'>Delayed Containers:</strong> " + ", ".join(delay_details["delayed_containers"]) + "</li>"
+        if delay_details.get("unassigned_delayed_items"):
+            details_html += "<li><strong style='color: #dc3545;'>Unassigned Items:</strong> Yes (Not yet in a container)</li>"
+        details_html += "</ul>"
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px; border-left: 5px solid #dc3545;">
+        <h2 style="color: #dc3545;">Purchase Order Delayed</h2>
+        <p>Purchase Order <strong>#{po_number}</strong> has just been flagged as <strong>{delay_type}</strong>.</p>
+        {details_html}
+        <p>Please log in to the system and provide a Delay Reason as soon as possible.</p>
+    </div>
+    """
+    
+    message = MessageSchema(subject=subject, recipients=emails, body=html, subtype=MessageType.html)
+    fm = FastMail(conf)
+    try:
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send delay notification: {e}")
+
+
+async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: list, shipment_delayed_pos: list, is_weekly_digest: bool = False):
+    if not settings.SMTP_USER or not settings.SMTP_PASS or not emails:
+        return
+
+    if is_weekly_digest:
+        subject = "Weekly Digest: Delayed Purchase Orders Requiring Action"
+        header_text = "Weekly Delayed PO Digest"
+        description_text = "The following Purchase Orders are currently delayed and <strong>do not have a delay reason provided:</strong>"
+    else:
+        subject = "ACTION REQUIRED: New Delayed Purchase Orders"
+        header_text = "New Delayed Purchase Orders"
+        description_text = "The following Purchase Orders have just been flagged as delayed. Please log in and provide a Delay Reason as soon as possible:"
+    
+    invoice_list_html = ""
+    for item in invoice_delayed_pos:
+        po = item.get("po") if isinstance(item, dict) else item
+        po_num = getattr(po, "order_number", None) or po.sellercloud_po_id
+        invoice_list_html += f"<li>PO #{po_num}</li>"
+    if not invoice_list_html:
+        invoice_list_html = "<li>None</li>"
+
+    shipment_list_html = ""
+    for item in shipment_delayed_pos:
+        po = item.get("po") if isinstance(item, dict) else item
+        details = item.get("delay_details", {}) if isinstance(item, dict) else {}
+        po_num = getattr(po, "order_number", None) or po.sellercloud_po_id
+        
+        shipment_list_html += f"<li><strong>PO #{po_num}</strong>"
+        
+        if details:
+            shipment_list_html += "<ul style='margin-bottom: 10px; font-size: 0.9em;'>"
+            if details.get("arrived_containers"):
+                shipment_list_html += "<li>Arrived: " + ", ".join(details["arrived_containers"]) + "</li>"
+            if details.get("delayed_containers"):
+                shipment_list_html += "<li><span style='color: #c0392b;'>Delayed:</span> " + ", ".join(details["delayed_containers"]) + "</li>"
+            if details.get("unassigned_delayed_items"):
+                shipment_list_html += "<li><span style='color: #c0392b;'>Unassigned Items:</span> Yes</li>"
+            shipment_list_html += "</ul>"
+            
+        shipment_list_html += "</li>"
+    if not shipment_list_html:
+        shipment_list_html = "<li>None</li>"
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
+        <h2 style="color: #333;">{header_text}</h2>
+        <p>{description_text}</p>
+        
+        <h3 style="color: #d35400;">Invoice Delayed</h3>
+        <ul>{invoice_list_html}</ul>
+        
+        <h3 style="color: #c0392b;">Shipment Delayed</h3>
+        <ul>{shipment_list_html}</ul>
+        
+        <p style="margin-top: 20px;">Please log in to the dashboard to update these POs.</p>
+    </div>
+    """
+    
+    message = MessageSchema(subject=subject, recipients=emails, body=html, subtype=MessageType.html)
+    fm = FastMail(conf)
+    try:
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send weekly digest: {e}")

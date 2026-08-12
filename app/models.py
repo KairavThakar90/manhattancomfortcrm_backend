@@ -27,6 +27,11 @@ class User(Base):
     phone = Column(String(50), nullable=True)
     payment_terms = Column(String(255), nullable=True)
     container_lead_time_days = Column(Integer, nullable=True)
+    # Notification Preferences
+    notify_new_user = Column(Boolean, default=False)
+    notify_trucker_email = Column(Boolean, default=False)
+    notify_invoice_delayed = Column(Boolean, default=False)
+    notify_shipment_delayed = Column(Boolean, default=False)
     
     is_active = Column(Boolean, default=True, nullable=False)
     otp_code = Column(String(10), nullable=True)
@@ -149,6 +154,10 @@ class PurchaseOrder(Base):
     currency = Column(String(10), default="USD")
     notes = Column(Text)
     status = Column(String(50), nullable=True)
+    
+    # Delay Tracking
+    delay_reason = Column(Text, nullable=True)
+    delay_notification_sent = Column(Boolean, default=False)
     
     # Warehouse Info (ForeignKey to Warehouse table)
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))
@@ -286,6 +295,20 @@ class ShippingContainer(Base):
 
     item_links = relationship("PurchaseOrderItemContainer", back_populates="container", cascade="all, delete-orphan")
     warehouse = relationship("Warehouse", back_populates="containers")
+    attachments = relationship("ShippingContainerAttachment", back_populates="container", cascade="all, delete-orphan")
+
+class ShippingContainerAttachment(Base):
+    __tablename__ = "shipping_container_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shipping_container_id = Column(UUID(as_uuid=True), ForeignKey("shipping_containers.id", ondelete="CASCADE"), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_url = Column(String(1024), nullable=False)
+    content_type = Column(String(255))
+    size = Column(Integer)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    container = relationship("ShippingContainer", back_populates="attachments")
 
 class PurchaseOrderItemContainer(Base):
     __tablename__ = "purchase_order_item_containers"
