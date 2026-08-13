@@ -60,13 +60,12 @@ def get_activities(
             
         result_data.append(log_out)
         
-    return {
-        "items": result_data,
-        "total": total_count,
-        "page": page,
-        "size": size,
-        "pages": total_pages
-    }
+    return schemas.PaginatedResponse(
+        results=result_data,
+        total=total_count,
+        page=page,
+        page_size=size
+    )
 
 @router.post("", response_model=dict)
 def create_activity(
