@@ -236,6 +236,7 @@ def list_purchase_orders(
     page: Optional[int] = Query(None, ge=1, description="Page number. Leave empty for all."),
     page_size: Optional[int] = Query(None, ge=1, description="Items per page. Leave empty for all."),
     status_code: Optional[int] = Query(None, description="Raw SellerCloud PurchaseOrderStatus code"),
+    status: Optional[str] = Query(None, description="Filter by text status (e.g., NOT_STARTED, IN_PRODUCTION)"),
     vendor_id: Optional[str] = None,
     company_id: Optional[str] = Query(None, description="Filter by local Company UUID"),
     sellercloud_company_id: Optional[int] = Query(None, description="Filter by SellerCloud Company integer ID"),
@@ -245,6 +246,7 @@ def list_purchase_orders(
     date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
+    is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -271,6 +273,46 @@ def list_purchase_orders(
     )
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
+        
+    if status is not None or is_completed is not None:
+        from sqlalchemy import func
+        subq = db.query(
+            models.PurchaseOrderItem.purchase_order_id,
+            func.sum(models.PurchaseOrderItem.qty_ordered).label('tot_ord'),
+            func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec')
+        ).group_by(models.PurchaseOrderItem.purchase_order_id).subquery()
+        
+        q = q.outerjoin(subq, models.PurchaseOrder.id == subq.c.purchase_order_id)
+        
+        if is_completed is True:
+            q = q.filter(
+                func.coalesce(subq.c.tot_ord, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif is_completed is False:
+            q = q.filter(
+                (func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)) | 
+                (func.coalesce(subq.c.tot_ord, 0) == 0)
+            )
+
+        if status == "SHIPPED":
+            q = q.filter(
+                func.coalesce(subq.c.tot_ord, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif status == "PARTIALLY_SHIPPED":
+            q = q.filter(
+                func.coalesce(subq.c.tot_ord, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif status is not None:
+            # For other statuses (e.g. IN_PRODUCTION), only match if not overridden by dynamic logic
+            q = q.filter(
+                models.PurchaseOrder.status == status,
+                func.coalesce(subq.c.tot_rec, 0) == 0
+            )
+    
     
     if current_user.role == "vendor":
         q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
@@ -1568,6 +1610,10 @@ def update_po_status(
     
     if status_data.status is not None:
         po.status = status_data.status
+        changed = True
+        
+    if status_data.delay_reason is not None:
+        po.delay_reason = status_data.delay_reason
         changed = True
         
     if changed:

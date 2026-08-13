@@ -20,11 +20,25 @@ def list_customers(
 ):
     from sqlalchemy import func
 
+    subq = db.query(
+        models.PurchaseOrderItem.purchase_order_id,
+        func.sum(models.PurchaseOrderItem.qty_ordered).label('tot_ord'),
+        func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec')
+    ).group_by(models.PurchaseOrderItem.purchase_order_id).subquery()
+
+    open_pos_subq = db.query(models.PurchaseOrder.id, models.PurchaseOrder.customer_id).outerjoin(
+        subq, models.PurchaseOrder.id == subq.c.purchase_order_id
+    ).filter(
+        (func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)) | 
+        (func.coalesce(subq.c.tot_ord, 0) == 0)
+    ).subquery()
+
     q = db.query(
         models.Customer,
-        func.count(models.PurchaseOrder.id).label('po_count')
+        func.count(open_pos_subq.c.id).label('po_count')
     ).outerjoin(
-        models.PurchaseOrder, models.Customer.id == models.PurchaseOrder.customer_id
+        open_pos_subq, 
+        models.Customer.id == open_pos_subq.c.customer_id
     )
     
     if company_id:
@@ -42,7 +56,9 @@ def list_customers(
     
     # Add a virtual "Manhattan Comfort" customer for POs with NO customer assigned
     if not page or page == 1:
-        unassigned_po_count = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.customer_id.is_(None)).count()
+        unassigned_po_count = db.query(open_pos_subq).filter(
+            open_pos_subq.c.customer_id.is_(None)
+        ).count()
         if unassigned_po_count > 0:
             results.append({
                 "id": "00000000-0000-0000-0000-000000000000",

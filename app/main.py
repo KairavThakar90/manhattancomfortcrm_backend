@@ -71,6 +71,7 @@ app.include_router(customers.router, prefix="/api/v1")
 app.include_router(vendors.router, prefix="/api/v1")
 app.include_router(purchase_orders.router, prefix="/api/v1")
 app.include_router(warehouses.router)
+app.include_router(activities.router, prefix="/api/v1")
 app.include_router(cron.router, prefix="/api/v1")
 
 
