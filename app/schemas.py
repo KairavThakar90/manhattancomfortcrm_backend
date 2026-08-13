@@ -23,6 +23,7 @@ class UserCreate(BaseModel):
     password: str
     role: str = "user"  # Default role
     vendor_id: Optional[uuid.UUID] = None
+    warehouse_id: Optional[uuid.UUID] = None
     # New fields for vendor registration:
     vendor_name: Optional[str] = None
     country: Optional[str] = None
@@ -39,6 +40,7 @@ class UserOut(BaseModel):
     last_name: Optional[str] = None
     full_name: Optional[str] = None
     role: str
+    warehouse_id: Optional[uuid.UUID] = None
     country: Optional[str] = None
     phone: Optional[str] = None
     payment_terms: Optional[str] = None
@@ -51,7 +53,26 @@ class UserOut(BaseModel):
     notify_shipment_delayed: bool = False
 
 
+class UserMentionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    email: EmailStr
+    full_name: Optional[str] = None
+    role: str
+
+
 class UserUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    role: Optional[str] = None
+    vendor_id: Optional[uuid.UUID] = None
+    warehouse_id: Optional[uuid.UUID] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    payment_terms: Optional[str] = None
+    container_lead_time_days: Optional[int] = None
+    is_active: Optional[bool] = None
     notify_new_user: Optional[bool] = None
     notify_trucker_email: Optional[bool] = None
     notify_invoice_delayed: Optional[bool] = None
