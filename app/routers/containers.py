@@ -601,6 +601,7 @@ def create_container(
 # PUT /containers/{container_id}
 # ---------------------------------------------------------------------------
 @router.put("/{container_id}")
+@router.patch("/{container_id}")
 async def update_container(
     container_id: str,
     background_tasks: BackgroundTasks,

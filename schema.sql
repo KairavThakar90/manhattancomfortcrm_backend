@@ -281,6 +281,18 @@ ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS factory_credit_needed T
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS trucker_email VARCHAR(255);
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS last_notified_trucker_email VARCHAR(255);
 
+CREATE TABLE IF NOT EXISTS shipping_container_attachments (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shipping_container_id    UUID NOT NULL REFERENCES shipping_containers(id) ON DELETE CASCADE,
+    file_name                 VARCHAR(255) NOT NULL,
+    file_url                  TEXT NOT NULL,
+    content_type              VARCHAR(255),
+    size                      INTEGER,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_container_attachments_container ON shipping_container_attachments(shipping_container_id);
+
 CREATE TABLE IF NOT EXISTS purchase_order_item_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     purchase_order_item_id     UUID NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
