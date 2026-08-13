@@ -13,7 +13,7 @@ from app import models, schemas
 from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
-    ContainerUpdate, ContainerAddItems
+    ContainerUpdate, ContainerAddItems, UserActivityLogOut, PaginatedResponse
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
@@ -607,7 +607,7 @@ async def update_container(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
     container_data: Optional[str] = Form(None),
-    files: Optional[List[UploadFile]] = File(None)
+    files: List[UploadFile] = File(default=[])
 ):
     import json
     if container_data:
@@ -835,7 +835,19 @@ def add_items_to_container(
     for po_id in affected_po_ids:
         recalculate_po_shipment_status(db, str(po_id))
 
-    log_activity(db, action="ADD_ITEMS_TO_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details={"items_added": len(resolved_items)})
+    for item_data, item in resolved_items:
+        log_activity(
+            db, 
+            action="ADD_ITEM_TO_CONTAINER", 
+            user_id=current_user.id, 
+            entity_type="CONTAINER", 
+            entity_id=str(container.id), 
+            details={
+                "sku": item.sku,
+                "qty_added": item_data.qty_in_container,
+                "message": f"Added {item_data.qty_in_container} units of {item.sku} to container"
+            }
+        )
 
     return {
         "success": True,
@@ -843,6 +855,46 @@ def add_items_to_container(
         "items_added": linked_items_summary
     }
 
+
+# ---------------------------------------------------------------------------
+# GET /containers/{container_id}/activities
+# ---------------------------------------------------------------------------
+@router.get("/{container_id}/activities", response_model=PaginatedResponse)
+def get_container_activities(
+    container_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get paginated activity logs for a specific container.
+    """
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    query = db.query(models.UserActivityLog).filter(
+        models.UserActivityLog.entity_type == "CONTAINER",
+        models.UserActivityLog.entity_id == str(container.id)
+    ).order_by(models.UserActivityLog.created_at.desc())
+
+    total = query.count()
+    logs = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    results = []
+    for log in logs:
+        log_out = UserActivityLogOut.model_validate(log)
+        if log.user:
+            log_out.user_name = log.user.full_name or log.user.email
+        results.append(log_out.model_dump(mode='python'))
+
+    return PaginatedResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        results=results
+    )
 
 # ---------------------------------------------------------------------------
 # GET /containers/{container_id}/details

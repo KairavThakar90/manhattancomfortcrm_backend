@@ -24,7 +24,9 @@ def list_customers(
         models.Customer,
         func.count(models.PurchaseOrder.id).label('po_count')
     ).outerjoin(
-        models.PurchaseOrder, models.Customer.id == models.PurchaseOrder.customer_id
+        models.PurchaseOrder, 
+        (models.Customer.id == models.PurchaseOrder.customer_id) & 
+        (~models.PurchaseOrder.purchase_order_status_code.in_([2, 3]))
     )
     
     if company_id:
@@ -42,7 +44,10 @@ def list_customers(
     
     # Add a virtual "Manhattan Comfort" customer for POs with NO customer assigned
     if not page or page == 1:
-        unassigned_po_count = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.customer_id.is_(None)).count()
+        unassigned_po_count = db.query(models.PurchaseOrder).filter(
+            models.PurchaseOrder.customer_id.is_(None),
+            ~models.PurchaseOrder.purchase_order_status_code.in_([2, 3])
+        ).count()
         if unassigned_po_count > 0:
             results.append({
                 "id": "00000000-0000-0000-0000-000000000000",

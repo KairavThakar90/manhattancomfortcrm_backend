@@ -234,6 +234,7 @@ def list_purchase_orders(
     date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
+    is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -260,6 +261,15 @@ def list_purchase_orders(
     )
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
+        
+    if is_completed is not None:
+        # Status codes: 2 = Received, 3 = Canceled (Considered Completed)
+        # 0 = Saved, 1 = Pending (Considered Open)
+        if is_completed:
+            q = q.filter(models.PurchaseOrder.purchase_order_status_code.in_([2, 3]))
+        else:
+            q = q.filter(~models.PurchaseOrder.purchase_order_status_code.in_([2, 3]))
+    
     
     if current_user.role == "vendor":
         q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
