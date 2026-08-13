@@ -972,6 +972,7 @@ def get_container_details(
         updated_at=container.updated_at,
         date_dropped_off=container.date_dropped_off,
         door=container.door,
+        trucker_email=container.trucker_email,
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
