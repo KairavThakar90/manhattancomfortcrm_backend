@@ -263,10 +263,7 @@ def list_purchase_orders(
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
         
-    if status is not None:
-        q = q.filter(models.PurchaseOrder.status == status)
-        
-    if is_completed is not None:
+    if status is not None or is_completed is not None:
         from sqlalchemy import func
         subq = db.query(
             models.PurchaseOrderItem.purchase_order_id,
@@ -276,15 +273,33 @@ def list_purchase_orders(
         
         q = q.outerjoin(subq, models.PurchaseOrder.id == subq.c.purchase_order_id)
         
-        if is_completed:
+        if is_completed is True:
             q = q.filter(
                 func.coalesce(subq.c.tot_ord, 0) > 0,
                 func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
             )
-        else:
+        elif is_completed is False:
             q = q.filter(
                 (func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)) | 
                 (func.coalesce(subq.c.tot_ord, 0) == 0)
+            )
+
+        if status == "SHIPPED":
+            q = q.filter(
+                func.coalesce(subq.c.tot_ord, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif status == "PARTIALLY_SHIPPED":
+            q = q.filter(
+                func.coalesce(subq.c.tot_ord, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif status is not None:
+            # For other statuses (e.g. IN_PRODUCTION), only match if not overridden by dynamic logic
+            q = q.filter(
+                models.PurchaseOrder.status == status,
+                func.coalesce(subq.c.tot_rec, 0) == 0
             )
     
     
@@ -1599,6 +1614,10 @@ def update_po_status(
     
     if status_data.status is not None:
         po.status = status_data.status
+        changed = True
+        
+    if status_data.delay_reason is not None:
+        po.delay_reason = status_data.delay_reason
         changed = True
         
     if changed:
