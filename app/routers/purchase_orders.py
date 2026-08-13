@@ -225,6 +225,7 @@ def list_purchase_orders(
     page: Optional[int] = Query(None, ge=1, description="Page number. Leave empty for all."),
     page_size: Optional[int] = Query(None, ge=1, description="Items per page. Leave empty for all."),
     status_code: Optional[int] = Query(None, description="Raw SellerCloud PurchaseOrderStatus code"),
+    status: Optional[str] = Query(None, description="Filter by text status (e.g., NOT_STARTED, IN_PRODUCTION)"),
     vendor_id: Optional[str] = None,
     company_id: Optional[str] = Query(None, description="Filter by local Company UUID"),
     sellercloud_company_id: Optional[int] = Query(None, description="Filter by SellerCloud Company integer ID"),
@@ -262,13 +263,29 @@ def list_purchase_orders(
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
         
+    if status is not None:
+        q = q.filter(models.PurchaseOrder.status == status)
+        
     if is_completed is not None:
-        # Status codes: 2 = Received, 3 = Canceled (Considered Completed)
-        # 0 = Saved, 1 = Pending (Considered Open)
+        from sqlalchemy import func
+        subq = db.query(
+            models.PurchaseOrderItem.purchase_order_id,
+            func.sum(models.PurchaseOrderItem.qty_ordered).label('tot_ord'),
+            func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec')
+        ).group_by(models.PurchaseOrderItem.purchase_order_id).subquery()
+        
+        q = q.outerjoin(subq, models.PurchaseOrder.id == subq.c.purchase_order_id)
+        
         if is_completed:
-            q = q.filter(models.PurchaseOrder.purchase_order_status_code.in_([2, 3]))
+            q = q.filter(
+                func.coalesce(subq.c.tot_ord, 0) > 0,
+                func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
+            )
         else:
-            q = q.filter(~models.PurchaseOrder.purchase_order_status_code.in_([2, 3]))
+            q = q.filter(
+                (func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)) | 
+                (func.coalesce(subq.c.tot_ord, 0) == 0)
+            )
     
     
     if current_user.role == "vendor":

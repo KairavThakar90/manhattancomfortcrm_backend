@@ -796,6 +796,8 @@ class UserActivityLogOut(BaseModel):
     
     # Optional nested user details for display
     user: Optional[UserOut] = None
+    user_name: Optional[str] = None
+    human_readable_message: Optional[str] = None
 
 class POStatusUpdate(BaseModel):
     status: Optional[str] = Field(None, description="E.g. NOT_STARTED, IN_PRODUCTION, DELAYED, COMPLETED, NOT_PLANNED, PLANNED, PARTIALLY_SHIPPED, SHIPPED")

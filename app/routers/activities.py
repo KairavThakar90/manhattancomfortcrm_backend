@@ -39,12 +39,25 @@ def get_activities(
         .all()
     )
     
-    # Enrich with user name
+    # Enrich with user name and human readable message
+    from app.services.activity_service import generate_human_readable_message
+    
     result_data = []
     for log in logs:
         log_out = schemas.UserActivityLogOut.model_validate(log)
+        user_name = None
         if log.user:
-            log_out.user_name = log.user.full_name or log.user.email
+            user_name = log.user.full_name or log.user.email
+            log_out.user_name = user_name
+            
+        log_out.human_readable_message = generate_human_readable_message(
+            action=log.action,
+            entity_type=log.entity_type,
+            entity_id=log.entity_id,
+            details=log.details,
+            user_name=user_name
+        )
+            
         result_data.append(log_out)
         
     return {
