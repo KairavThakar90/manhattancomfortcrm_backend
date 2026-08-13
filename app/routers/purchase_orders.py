@@ -462,9 +462,7 @@ async def add_po_comment(
     if current_user.role == "vendor":
         if str(po.vendor_id) != str(current_user.vendor_id):
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
-<<<<<<< HEAD
-=======
-            
+
     if not comment:
         try:
             body = await request.json()
@@ -480,7 +478,6 @@ async def add_po_comment(
 
     if not comment:
         raise HTTPException(status_code=400, detail="comment field is required")
->>>>>>> origin/main
 
     try:
         if not tagged_user_ids or tagged_user_ids == "null":

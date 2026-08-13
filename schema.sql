@@ -72,6 +72,10 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS country VARCHAR(120);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS container_lead_time_days INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_new_user BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_trucker_email BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_invoice_delayed BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_shipment_delayed BOOLEAN DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMPTZ;
 
@@ -153,6 +157,8 @@ CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(purchase_order_statu
 
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status VARCHAR(50);
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE SET NULL;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason TEXT;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_notification_sent BOOLEAN DEFAULT FALSE;
 
 -- ---------------------------------------------------------
 -- 5b. Purchase Order Comments
