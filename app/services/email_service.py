@@ -130,6 +130,9 @@ async def send_tag_notification(
         logger.info(f"Sent notification email to TO: {to_email}, CC: {cc_emails}")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
+        import traceback
+        with open("email_error.txt", "a") as f:
+            f.write(traceback.format_exc() + "\n")
 
 async def send_welcome_email(email_to: str, password: str, login_link: str, first_name: str = ""):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
