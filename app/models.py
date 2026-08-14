@@ -21,6 +21,7 @@ class User(Base):
     full_name = Column(String(255))
     role = Column(String(50), default="user", nullable=False)
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True)
+    warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"), nullable=True)
     
     # Registration info (mirrored from Vendor for clarity on per-user level)
     country = Column(String(120), nullable=True)
@@ -40,6 +41,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     
     vendor = relationship("Vendor")
+    warehouse = relationship("Warehouse")
     po_comments = relationship("PurchaseOrderComment", back_populates="user")
     po_item_comments = relationship("PurchaseOrderItemComment", back_populates="user")
 

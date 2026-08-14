@@ -15,7 +15,7 @@ from app.services.email_service import send_welcome_email, send_2fa_email, send_
 from app.services.activity_service import log_activity
 from app.config import settings
 from app.schemas import (
-    Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate,
+    Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate, UserMentionOut,
     UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest
 )
 
@@ -252,8 +252,37 @@ def get_all_users(
     db: Session = Depends(get_db)
 ):
     """Get a list of all active users, for tagging/mentioning in comments."""
-    users = db.query(models.User).filter(models.User.is_active == True).all()
+    users = db.query(models.User).filter(
+        models.User.is_active == True,
+        models.User.email != "googlecloudcron@manhattancomfort.com"
+    ).all()
     return [UserOut.model_validate(u) for u in users]
+
+
+@router.get("/users/tag", response_model=list[UserMentionOut])
+def get_mentionable_users(
+    current_user: models.User = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a list of active users that the current user is allowed to tag."""
+    query = db.query(models.User).filter(
+        models.User.is_active == True,
+        models.User.email != "googlecloudcron@manhattancomfort.com"
+    )
+    
+    if current_user.role == "warehouse":
+        query = query.filter(
+            (models.User.role == "admin") | 
+            ((models.User.role == "warehouse") & (models.User.warehouse_id == current_user.warehouse_id))
+        )
+    elif current_user.role == "vendor":
+        query = query.filter(
+            (models.User.role == "admin") | 
+            ((models.User.role == "vendor") & (models.User.vendor_id == current_user.vendor_id))
+        )
+        
+    users = query.all()
+    return [UserMentionOut.model_validate(u) for u in users]
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -307,6 +336,21 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
             db.commit()
             db.refresh(new_vendor)
             user_data.vendor_id = new_vendor.id
+            
+    # Check warehouse role requirements
+    if user_data.role == "warehouse":
+        if user_data.warehouse_id:
+            warehouse_exists = db.query(models.Warehouse).filter(models.Warehouse.id == user_data.warehouse_id).first()
+            if not warehouse_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Warehouse not found"
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="warehouse_id is required for warehouse role"
+            )
     
     # Hash the password
     hashed_password = auth_utils.hash_password(user_data.password)
@@ -321,6 +365,7 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
         full_name=full_name,
         role=user_data.role,
         vendor_id=user_data.vendor_id if user_data.role == "vendor" else None,
+        warehouse_id=user_data.warehouse_id if user_data.role == "warehouse" else None,
         country=user_data.country if user_data.role == "vendor" else None,
         phone=user_data.phone if user_data.role == "vendor" else None,
         payment_terms=user_data.payment_terms if user_data.role == "vendor" else None,
@@ -359,16 +404,15 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
     
     return UserOut.model_validate(new_user)
 
-@router.patch("/users/{user_id}", response_model=UserOut)
-@router.put("/users/{user_id}", response_model=UserOut)
-def update_user(
+
+@router.get("/users/{user_id}", response_model=UserOut)
+def get_user(
     user_id: str,
-    user_update: UserUpdate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth_utils.get_current_user)
 ):
     """
-    Update a user's notification preferences.
+    Get details of a specific user.
     Requires admin privileges.
     """
     if current_user.role != "admin":
@@ -378,14 +422,87 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    return UserOut.model_validate(user)
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+@router.put("/users/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: str,
+    user_update: UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Update a user's details.
+    Requires admin privileges.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized. Admin only.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.email == "googlecloudcron@manhattancomfort.com":
+        raise HTTPException(status_code=403, detail="This system account cannot be edited.")
+
     update_data = user_update.model_dump(exclude_unset=True)
+    
+    # Validation for role-specific IDs
+    if "role" in update_data:
+        new_role = update_data["role"]
+        if new_role == "vendor":
+            v_id = update_data.get("vendor_id", user.vendor_id)
+            if not v_id:
+                raise HTTPException(status_code=400, detail="vendor_id is required for vendor role")
+        elif new_role == "warehouse":
+            w_id = update_data.get("warehouse_id", user.warehouse_id)
+            if not w_id:
+                raise HTTPException(status_code=400, detail="warehouse_id is required for warehouse role")
+
     for key, value in update_data.items():
         setattr(user, key, value)
+        
+    # Recalculate full name if first or last name changed
+    if "first_name" in update_data or "last_name" in update_data:
+        fname = user.first_name or ""
+        lname = user.last_name or ""
+        user.full_name = f"{fname} {lname}".strip()
         
     db.commit()
     db.refresh(user)
     
     return UserOut.model_validate(user)
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Soft delete a user.
+    Requires admin privileges.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized. Admin only.")
+        
+    if str(current_user.id) == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.email == "googlecloudcron@manhattancomfort.com":
+        raise HTTPException(status_code=403, detail="This system account cannot be deleted.")
+
+    user.is_active = False
+    db.commit()
+    
+    return None
 
 
 @router.put("/update-password")

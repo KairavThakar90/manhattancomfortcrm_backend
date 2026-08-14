@@ -65,6 +65,7 @@ def list_containers(
     sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Paginated list of all shipping containers with filters and summary counts.
@@ -117,6 +118,10 @@ def list_containers(
         query = query.join(models.Warehouse, models.ShippingContainer.warehouse_id == models.Warehouse.id).filter(
             models.Warehouse.sellercloud_warehouse_id == sellercloud_warehouse_id
         )
+
+    # Restrict Warehouse Users to their assigned warehouse
+    if current_user.role == "warehouse" and current_user.warehouse_id:
+        query = query.filter(models.ShippingContainer.warehouse_id == current_user.warehouse_id)
 
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:
