@@ -464,10 +464,13 @@ def update_user(
     Update a user's details.
     Requires admin privileges.
     """
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized. Admin only.")
+    if current_user.role != "admin" and str(current_user.id) != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.query(models.User).options(
+        joinedload(models.User.vendor),
+        joinedload(models.User.warehouse)
+    ).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
@@ -475,6 +478,12 @@ def update_user(
         raise HTTPException(status_code=403, detail="This system account cannot be edited.")
 
     update_data = user_update.model_dump(exclude_unset=True)
+    
+    if current_user.role != "admin":
+        # Non-admins cannot update sensitive fields
+        restricted_keys = ["role", "vendor_id", "warehouse_id", "is_active", "container_lead_time_days", "payment_terms"]
+        for key in restricted_keys:
+            update_data.pop(key, None)
     
     # Validation for role-specific IDs
     if "role" in update_data:
