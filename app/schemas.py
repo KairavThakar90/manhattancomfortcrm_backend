@@ -54,6 +54,8 @@ class UserOut(BaseModel):
     notify_trucker_email: bool = False
     notify_invoice_delayed: bool = False
     notify_shipment_delayed: bool = False
+    
+    created_at: Optional[datetime] = None
 
 
 class UserMentionOut(BaseModel):
@@ -75,6 +77,7 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     payment_terms: Optional[str] = None
     container_lead_time_days: Optional[int] = None
+    password: Optional[str] = None
     is_active: Optional[bool] = None
     notify_new_user: Optional[bool] = None
     notify_trucker_email: Optional[bool] = None

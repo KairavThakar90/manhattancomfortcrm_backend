@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timedelta
 import random
 import httpx
-from typing import Union
+from typing import Union, Optional
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -248,17 +249,36 @@ def read_current_user(current_user=Depends(auth_utils.get_current_user)):
 
 @router.get("/users", response_model=list[UserOut])
 def get_all_users(
+    search: Optional[str] = None,
+    role: Optional[str] = None,
     current_user: models.User = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get a list of all active users, for tagging/mentioning in comments."""
-    users = db.query(models.User).options(
+    query = db.query(models.User).options(
         joinedload(models.User.vendor),
         joinedload(models.User.warehouse)
     ).filter(
         models.User.is_active == True,
         models.User.email != "googlecloudcron@manhattancomfort.com"
-    ).all()
+    )
+    
+    if role:
+        query = query.filter(models.User.role == role)
+        
+    if search:
+        search_term = f"{search}%"
+        query = query.filter(
+            or_(
+                models.User.first_name.ilike(search_term),
+                models.User.last_name.ilike(search_term),
+                models.User.email.ilike(search_term),
+                models.User.role.ilike(search_term)
+            )
+        )
+        
+    query = query.order_by(models.User.created_at.desc())
+    users = query.all()
     return [UserOut.model_validate(u) for u in users]
 
 
@@ -467,6 +487,11 @@ def update_user(
             w_id = update_data.get("warehouse_id", user.warehouse_id)
             if not w_id:
                 raise HTTPException(status_code=400, detail="warehouse_id is required for warehouse role")
+
+    if "password" in update_data:
+        password = update_data.pop("password")
+        if password:
+            user.hashed_password = auth_utils.hash_password(password)
 
     for key, value in update_data.items():
         setattr(user, key, value)
