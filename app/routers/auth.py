@@ -431,6 +431,8 @@ def get_user(
     return UserOut.model_validate(user)
 
 
+@router.post("/users/{user_id}", response_model=UserOut)
+@router.patch("/users/{user_id}", response_model=UserOut)
 @router.put("/users/{user_id}", response_model=UserOut)
 def update_user(
     user_id: str,
