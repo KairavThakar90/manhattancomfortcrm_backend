@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -359,6 +359,7 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
     
     return UserOut.model_validate(new_user)
 
+@router.patch("/users/{user_id}", response_model=UserOut)
 @router.put("/users/{user_id}", response_model=UserOut)
 def update_user(
     user_id: str,
@@ -410,3 +411,29 @@ def update_password(
     db.commit()
     
     return {"message": "Password updated successfully"}
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Deactivate a user (soft delete). Admin only.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized. Admin only.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Soft delete
+    user.is_active = False
+    db.commit()
+
+    # Log activity
+    log_activity(db, action="DELETE_USER", user_id=current_user.id, entity_type="USER", entity_id=str(user_id))
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
