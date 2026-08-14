@@ -40,7 +40,10 @@ class UserOut(BaseModel):
     last_name: Optional[str] = None
     full_name: Optional[str] = None
     role: str
+    vendor_id: Optional[uuid.UUID] = None
+    vendor: Optional['VendorSummary'] = None
     warehouse_id: Optional[uuid.UUID] = None
+    warehouse: Optional['WarehouseOut'] = None
     country: Optional[str] = None
     phone: Optional[str] = None
     payment_terms: Optional[str] = None
