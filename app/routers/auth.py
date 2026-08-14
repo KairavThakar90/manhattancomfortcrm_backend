@@ -252,7 +252,10 @@ def get_all_users(
     db: Session = Depends(get_db)
 ):
     """Get a list of all active users, for tagging/mentioning in comments."""
-    users = db.query(models.User).filter(models.User.is_active == True).all()
+    users = db.query(models.User).filter(
+        models.User.is_active == True,
+        models.User.email != "googlecloudcron@manhattancomfort.com"
+    ).all()
     return [UserOut.model_validate(u) for u in users]
 
 
@@ -262,7 +265,10 @@ def get_mentionable_users(
     db: Session = Depends(get_db)
 ):
     """Get a list of active users that the current user is allowed to tag."""
-    query = db.query(models.User).filter(models.User.is_active == True)
+    query = db.query(models.User).filter(
+        models.User.is_active == True,
+        models.User.email != "googlecloudcron@manhattancomfort.com"
+    )
     
     if current_user.role == "warehouse":
         query = query.filter(
@@ -398,6 +404,27 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
     
     return UserOut.model_validate(new_user)
 
+
+@router.get("/users/{user_id}", response_model=UserOut)
+def get_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Get details of a specific user.
+    Requires admin privileges.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized. Admin only.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return UserOut.model_validate(user)
+
+
 @router.put("/users/{user_id}", response_model=UserOut)
 def update_user(
     user_id: str,
@@ -415,6 +442,9 @@ def update_user(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.email == "googlecloudcron@manhattancomfort.com":
+        raise HTTPException(status_code=403, detail="This system account cannot be edited.")
 
     update_data = user_update.model_dump(exclude_unset=True)
     
@@ -464,6 +494,9 @@ def delete_user(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.email == "googlecloudcron@manhattancomfort.com":
+        raise HTTPException(status_code=403, detail="This system account cannot be deleted.")
 
     user.is_active = False
     db.commit()
