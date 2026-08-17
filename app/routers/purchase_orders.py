@@ -631,8 +631,7 @@ async def add_po_comment(
             "content_type": f.content_type
         })
         
-    if uploaded_attachments:
-        db.commit()
+    db.commit()
     
     setattr(new_comment, "attachments", uploaded_attachments)
     
@@ -852,8 +851,7 @@ async def add_po_item_comment(
             "content_type": f.content_type
         })
         
-    if uploaded_attachments:
-        db.commit()
+    db.commit()
     
     setattr(new_comment, "attachments", uploaded_attachments)
     
