@@ -905,10 +905,31 @@ async def update_po_item_comment(
     return comment
 
 
+def auto_sync_po_background(po_id: int):
+    import httpx
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        logger.info(f"Auto-syncing PO {po_id} in background...")
+        # Give the server a moment to finish the current transaction
+        import time
+        time.sleep(2)
+        
+        # 1. Sync the single PO (to get updated totals)
+        httpx.post(f"http://127.0.0.1:8000/api/v1/purchase-orders/{po_id}/sync", timeout=30.0)
+        
+        # 2. Sync containers
+        httpx.post(f"http://127.0.0.1:8000/api/v1/purchase-orders/{po_id}/sync-containers", timeout=60.0)
+        
+        logger.info(f"Auto-sync complete for PO {po_id}")
+    except Exception as e:
+        logger.error(f"Auto-sync failed for PO {po_id}: {e}")
+
 @router.put("/items/{item_id}/quantity", response_model=POItemBasicOut)
 def update_po_item_quantity(
     item_id: str,
     update_data: POItemQuantityUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -950,6 +971,9 @@ def update_po_item_quantity(
     db.refresh(item)
     
     log_activity(db, action="UPDATE_PO_ITEM_QUANTITY", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id), details={"old_qty": old_qty, "new_qty": item.qty_ordered})
+    
+    # Auto-trigger sync in background
+    background_tasks.add_task(auto_sync_po_background, po.sellercloud_po_id)
     
     return item
 
