@@ -10,15 +10,15 @@ EMAIL_SIGNATURE_HTML = """
     <tr>
         <td style="background-color: #f4efeb; padding: 20px; text-align: center; vertical-align: middle; width: 40%;">
             <a href="https://www.manhattancomfort.com">
-                <img src="https://www.manhattancomfort.com/cdn/shop/files/manhattan-comfort-logo-horizontal.png" alt="Manhattan Comfort" style="max-width: 150px; margin-bottom: 15px; border: none;" />
+                <img src="https://storage.googleapis.com/manhattancomfort-crm-backend-storage/email-assets/manhattan-comfort-logo-unnamed.png" alt="Manhattan Comfort" style="max-width: 150px; margin-bottom: 15px; border: none;" />
             </a>
             <br />
             <!-- Social Icons -->
-            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/20/20673.png" width="22" alt="Facebook" style="border: none;" /></a>
-            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/1384/1384031.png" width="22" alt="Instagram" style="border: none;" /></a>
-            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/5969/5969020.png" width="22" alt="X" style="border: none;" /></a>
-            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/145/145808.png" width="22" alt="Pinterest" style="border: none;" /></a>
-            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/61/61109.png" width="22" alt="LinkedIn" style="border: none;" /></a>
+            <a href="https://www.facebook.com/ManhattanComfort" style="text-decoration: none; margin: 0 4px;"><img src="https://img.icons8.com/ios-filled/50/000000/facebook-circled--v1.png" width="22" alt="Facebook" style="border: none;" /></a>
+            <a href="https://www.instagram.com/manhattancomfort" style="text-decoration: none; margin: 0 4px;"><img src="https://img.icons8.com/ios-filled/50/000000/instagram-new--v1.png" width="22" alt="Instagram" style="border: none;" /></a>
+            <a href="https://x.com/ManhattanComfor" style="text-decoration: none; margin: 0 4px;"><img src="https://img.icons8.com/ios-filled/50/000000/twitterx--v2.png" width="22" alt="X" style="border: none;" /></a>
+            <a href="https://www.pinterest.com/manhattancomfor/" style="text-decoration: none; margin: 0 4px;"><img src="https://img.icons8.com/ios-filled/50/000000/pinterest--v1.png" width="22" alt="Pinterest" style="border: none;" /></a>
+            <a href="https://www.linkedin.com/company/manhattan-comfort/" style="text-decoration: none; margin: 0 4px;"><img src="https://img.icons8.com/ios-filled/50/000000/linkedin-circled--v1.png" width="22" alt="LinkedIn" style="border: none;" /></a>
         </td>
         <td style="background-color: #000000; color: #ffffff; padding: 25px 30px; vertical-align: middle; width: 60%;">
             <h3 style="margin: 0 0 5px 0; font-size: 18px; color: #ffffff; font-weight: bold;">Manhattan Comfort</h3>
@@ -267,15 +267,16 @@ async def send_po_status_update_email(
         logger.error(f"Failed to send PO status update email: {e}")
 
 
-async def send_container_emptied_notification(email_to: str, container_name: str, date_emptied: str, cc_emails: list = None):
+async def send_container_emptied_notification(email_to: str, container_name: str, date_emptied: str, door_name: str = None, cc_emails: list = None):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         return
 
     subject = f"Container Emptied: {container_name}"
+    door_html = f" at Door <strong>{door_name}</strong>" if door_name else ""
     html = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
         <h2 style="color: #333;">Container Emptied Notification</h2>
-        <p>Container <strong>{container_name}</strong> was emptied on <strong>{date_emptied}</strong>.</p>
+        <p>Container <strong>{container_name}</strong> was emptied on <strong>{date_emptied}</strong>{door_html}.</p>
         {EMAIL_SIGNATURE_HTML}
     </div>
     """
@@ -375,9 +376,9 @@ async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: 
     for item in invoice_delayed_pos:
         po = item.get("po") if isinstance(item, dict) else item
         po_num = getattr(po, "order_number", None) or po.sellercloud_po_id
-        invoice_list_html += f"<li>PO #{po_num}</li>"
+        invoice_list_html += f"<tr><td style='padding: 8px; border: 1px solid #ddd;'>PO #{po_num}</td></tr>"
     if not invoice_list_html:
-        invoice_list_html = "<li>None</li>"
+        invoice_list_html = "<tr><td style='padding: 8px; border: 1px solid #ddd;'>None</td></tr>"
 
     shipment_list_html = ""
     for item in shipment_delayed_pos:
@@ -385,21 +386,17 @@ async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: 
         details = item.get("delay_details", {}) if isinstance(item, dict) else {}
         po_num = getattr(po, "order_number", None) or po.sellercloud_po_id
         
-        shipment_list_html += f"<li><strong>PO #{po_num}</strong>"
+        arrived = ", ".join(details.get("arrived_containers", [])) if details.get("arrived_containers") else "None"
+        delayed = ", ".join(details.get("delayed_containers", [])) if details.get("delayed_containers") else "None"
+        unassigned = "Yes" if details.get("unassigned_delayed_items") else "No"
         
-        if details:
-            shipment_list_html += "<ul style='margin-bottom: 10px; font-size: 0.9em;'>"
-            if details.get("arrived_containers"):
-                shipment_list_html += "<li>Arrived: " + ", ".join(details["arrived_containers"]) + "</li>"
-            if details.get("delayed_containers"):
-                shipment_list_html += "<li><span style='color: #c0392b;'>Delayed:</span> " + ", ".join(details["delayed_containers"]) + "</li>"
-            if details.get("unassigned_delayed_items"):
-                shipment_list_html += "<li><span style='color: #c0392b;'>Unassigned Items:</span> Yes</li>"
-            shipment_list_html += "</ul>"
-            
-        shipment_list_html += "</li>"
+        shipment_list_html += f"<tr><td style='padding: 8px; border: 1px solid #ddd;'>PO #{po_num}</td>"
+        shipment_list_html += f"<td style='padding: 8px; border: 1px solid #ddd;'>{arrived}</td>"
+        shipment_list_html += f"<td style='padding: 8px; border: 1px solid #ddd; color: #c0392b;'>{delayed}</td>"
+        shipment_list_html += f"<td style='padding: 8px; border: 1px solid #ddd; color: #c0392b;'>{unassigned}</td></tr>"
+
     if not shipment_list_html:
-        shipment_list_html = "<li>None</li>"
+        shipment_list_html = "<tr><td colspan='4' style='padding: 8px; border: 1px solid #ddd; text-align: center;'>None</td></tr>"
 
     html = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
@@ -407,10 +404,27 @@ async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: 
         <p>{description_text}</p>
         
         <h3 style="color: #d35400;">Invoice Delayed</h3>
-        <ul>{invoice_list_html}</ul>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <thead>
+                <tr style="background-color: #f2f2f2;">
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">PO Number</th>
+                </tr>
+            </thead>
+            <tbody>{invoice_list_html}</tbody>
+        </table>
         
         <h3 style="color: #c0392b;">Shipment Delayed</h3>
-        <ul>{shipment_list_html}</ul>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <thead>
+                <tr style="background-color: #f2f2f2;">
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">PO Number</th>
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Arrived Containers</th>
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Delayed Containers</th>
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: left;">Unassigned Items</th>
+                </tr>
+            </thead>
+            <tbody>{shipment_list_html}</tbody>
+        </table>
         
         <p style="margin-top: 20px;">Please log in to the dashboard to update these POs.</p>
         {EMAIL_SIGNATURE_HTML}

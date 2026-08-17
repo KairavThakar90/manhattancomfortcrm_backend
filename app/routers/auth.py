@@ -301,6 +301,7 @@ def get_mentionable_users(
     elif current_user.role == "vendor":
         query = query.filter(
             (models.User.role == "admin") | 
+            (models.User.role == "office") | 
             ((models.User.role == "vendor") & (models.User.vendor_id == current_user.vendor_id))
         )
         
