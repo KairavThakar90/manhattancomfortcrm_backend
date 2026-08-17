@@ -13,31 +13,53 @@ def get_gcs_client():
         print(f"Error initializing GCS client: {e}")
         return None
 
-async def upload_file_to_gcs(file_obj: bytes, original_filename: str, content_type: str) -> str:
+def generate_gcs_filename(original_filename: str):
+    """Generates the unique filename and public URL instantly without network calls"""
+    unique_filename = f"attachments/{uuid.uuid4().hex}_{original_filename}"
+    public_url = f"https://storage.googleapis.com/{settings.GCS_BUCKET_NAME}/{unique_filename}"
+    return unique_filename, public_url
+
+async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, content_type: str):
     """
-    Uploads a file to Google Cloud Storage and returns the public URL.
-    Generates a unique filename to prevent collisions.
+    Background task to upload a file to Google Cloud Storage.
     """
     client = get_gcs_client()
     if not client:
-        raise Exception("Google Cloud Storage is not configured properly.")
+        return
 
     bucket = client.bucket(settings.GCS_BUCKET_NAME)
     
-    # Generate unique filename
-    ext = original_filename.split(".")[-1] if "." in original_filename else ""
-    unique_filename = f"attachments/{uuid.uuid4().hex}_{original_filename}"
-    
     from starlette.concurrency import run_in_threadpool
-    
+    import io
+    from PIL import Image
+
+    def compress_and_upload(file_data: bytes, c_type: str, dest_blob):
+        # Compress image if applicable
+        if c_type in ["image/jpeg", "image/jpg", "image/png"]:
+            try:
+                img = Image.open(io.BytesIO(file_data))
+                if img.mode in ("RGBA", "P") and c_type in ["image/jpeg", "image/jpg"]:
+                    img = img.convert("RGB")
+                    
+                # Resize if it's very large (max 1920x1920)
+                img.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
+                
+                output = io.BytesIO()
+                img_format = "JPEG" if c_type in ["image/jpeg", "image/jpg"] else "PNG"
+                
+                if img_format == "JPEG":
+                    img.save(output, format=img_format, quality=75, optimize=True)
+                else:
+                    img.save(output, format=img_format, optimize=True)
+                    
+                file_data = output.getvalue()
+            except Exception as e:
+                print(f"Failed to compress image: {e}")
+                
+        # Upload the processed file bytes
+        dest_blob.upload_from_string(file_data, content_type=c_type)
+
     blob = bucket.blob(unique_filename)
     
-    # Upload the file bytes in a separate thread so it doesn't block the async event loop
-    await run_in_threadpool(blob.upload_from_string, file_obj, content_type=content_type)
-    
-    # Note: Uniform bucket-level access is enabled on this bucket.
-    # The bucket itself has Storage Object Viewer permission for allUsers, 
-    # so we don't need to (and cannot) set individual objects to public.
-    # Just return the public URL directly!
-
-    return blob.public_url
+    # Run both the CPU-intensive compression and the blocking upload in a separate thread
+    await run_in_threadpool(compress_and_upload, file_obj, content_type, blob)
