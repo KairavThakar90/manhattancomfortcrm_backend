@@ -19,6 +19,14 @@ def generate_gcs_filename(original_filename: str):
     public_url = f"https://storage.googleapis.com/{settings.GCS_BUCKET_NAME}/{unique_filename}"
     return unique_filename, public_url
 
+async def upload_file_to_gcs(file_obj: bytes, original_filename: str, content_type: str) -> str:
+    """
+    Legacy wrapper for synchronous foreground uploads used by other modules.
+    """
+    unique_filename, public_url = generate_gcs_filename(original_filename)
+    await upload_file_to_gcs_background(file_obj, unique_filename, content_type)
+    return public_url
+
 async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, content_type: str):
     """
     Background task to upload a file to Google Cloud Storage.
