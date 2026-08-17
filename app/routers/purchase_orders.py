@@ -21,10 +21,35 @@ router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependen
 
 
 async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, section="Purchase Orders", po_number=None, sku=None, comment_text="", attachments=None):
-    if not tagged_user_ids:
-        return
     import app.models as models
-    users = db.query(models.User).filter(models.User.id.in_(tagged_user_ids)).all()
+    import re
+    
+    explicit_ids = set()
+    if tagged_user_ids:
+        if isinstance(tagged_user_ids, str):
+            found_uuids = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', tagged_user_ids)
+            explicit_ids.update(found_uuids)
+        elif isinstance(tagged_user_ids, list):
+            explicit_ids.update(str(u) for u in tagged_user_ids)
+
+    if comment_text:
+        matches = re.findall(r'@([A-Za-z0-9_\-\.]+)', comment_text)
+        if matches:
+            users = db.query(models.User).all()
+            for match in matches:
+                match_clean = match.lower().replace("_", " ")
+                for user in users:
+                    full_name = (user.full_name or "").lower()
+                    first_name = (user.first_name or "").lower()
+                    if full_name and match_clean in full_name:
+                        explicit_ids.add(str(user.id))
+                    elif first_name and match_clean in first_name:
+                        explicit_ids.add(str(user.id))
+
+    if not explicit_ids:
+        return
+        
+    users = db.query(models.User).filter(models.User.id.in_(list(explicit_ids))).all()
     emails = [u.email for u in users if u.email]
     if emails:
         background_tasks.add_task(

@@ -1,5 +1,7 @@
+import os
 from pydantic_settings import BaseSettings
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class Settings(BaseSettings):
     # Neon Postgres
@@ -32,7 +34,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
 
     class Config:
-        env_file = ".env"
+        env_file = os.path.join(BASE_DIR, ".env")
 
 
 settings = Settings()
