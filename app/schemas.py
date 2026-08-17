@@ -203,6 +203,18 @@ class WarehouseOut(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class POItemQuantityUpdate(BaseModel):
+    qty_ordered: int = Field(gt=0, description="New ordered quantity")
+
+
+class POItemBasicOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sellercloud_item_id: Optional[int] = None
+    sku: Optional[str] = None
+    qty_ordered: int
+
+
 class ContainerSummary(BaseModel):
     """Container summary for items — includes qty_in_container from the join table."""
     model_config = ConfigDict(from_attributes=True)
@@ -306,6 +318,7 @@ class ContainerDetailOut(BaseModel):
     is_received: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    warehouse: Optional[WarehouseOut] = None
 
     # Lifecycle Fields
     date_dropped_off: Optional[datetime] = None

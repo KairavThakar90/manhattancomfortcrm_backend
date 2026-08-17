@@ -11,7 +11,7 @@ from sqlalchemy import and_, or_, cast, String
 from app.database import get_db
 from app.auth import get_current_user
 from app import models
-from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate
+from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
 from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
@@ -26,11 +26,8 @@ async def process_comment_tags(db, tagged_user_ids, commenter_name, link, backgr
     
     explicit_ids = set()
     if tagged_user_ids:
-        if isinstance(tagged_user_ids, str):
-            found_uuids = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', tagged_user_ids)
-            explicit_ids.update(found_uuids)
-        elif isinstance(tagged_user_ids, list):
-            explicit_ids.update(str(u) for u in tagged_user_ids)
+        found_uuids = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', str(tagged_user_ids))
+        explicit_ids.update(found_uuids)
 
     if comment_text:
         matches = re.findall(r'@([A-Za-z0-9_\-\.]+)', comment_text)
@@ -906,6 +903,55 @@ async def update_po_item_comment(
     
     log_activity(db, action="UPDATE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": str(comment.id)})
     return comment
+
+
+@router.put("/items/{item_id}/quantity", response_model=POItemBasicOut)
+def update_po_item_quantity(
+    item_id: str,
+    update_data: POItemQuantityUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    import uuid
+    from app.services.sellercloud_client import SellerCloudClient
+
+    try:
+        item_uuid = uuid.UUID(item_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid item ID format")
+
+    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == item_uuid).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == item.purchase_order_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Parent PO not found")
+        
+    if not po.sellercloud_po_id or not item.sellercloud_item_id:
+        raise HTTPException(status_code=400, detail="Item is not properly linked to SellerCloud")
+
+    sc_client = SellerCloudClient()
+    try:
+        success = sc_client.update_purchase_order_item_quantity(
+            po_id=po.sellercloud_po_id, 
+            item_id=item.sellercloud_item_id, 
+            new_qty=update_data.qty_ordered,
+            unit_price=float(item.unit_price) if item.unit_price else 0.0
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail="SellerCloud returned an unsuccessful status")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update SellerCloud: {str(e)}")
+
+    old_qty = item.qty_ordered
+    item.qty_ordered = update_data.qty_ordered
+    db.commit()
+    db.refresh(item)
+    
+    log_activity(db, action="UPDATE_PO_ITEM_QUANTITY", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id), details={"old_qty": old_qty, "new_qty": item.qty_ordered})
+    
+    return item
 
 
 @router.get("/filters/all")

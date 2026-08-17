@@ -157,6 +157,20 @@ class SellerCloudClient:
         resp = self._request("GET", f"/api/PurchaseOrders/{po_id}")
         return resp.json()
 
+    def update_purchase_order_item_quantity(self, po_id: int, item_id: int, new_qty: int, unit_price: float) -> bool:
+        """Update a specific PO item's ordered quantity in SellerCloud."""
+        payload = {
+            "Items": [
+                {
+                    "ID": item_id,
+                    "QtyUnitsOrdered": new_qty,
+                    "UnitPrice": unit_price
+                }
+            ]
+        }
+        resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}/Items", json=payload)
+        return resp.status_code == 200
+
     # Alias used by the single-PO sync endpoint in the purchase_orders router
     def get_purchase_order_detail(self, po_id: int) -> dict:
         return self.get_purchase_order(po_id)

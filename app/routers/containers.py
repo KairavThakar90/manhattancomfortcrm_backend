@@ -928,7 +928,8 @@ def get_container_details(
             .joinedload(models.PurchaseOrderItemContainer.item)
             .joinedload(models.PurchaseOrderItem.purchase_order)
             .joinedload(models.PurchaseOrder.vendor),
-            joinedload(models.ShippingContainer.attachments)
+            joinedload(models.ShippingContainer.attachments),
+            joinedload(models.ShippingContainer.warehouse)
         )
         .first()
     )
@@ -975,6 +976,7 @@ def get_container_details(
         is_received=container.received_date is not None,
         created_at=container.created_at,
         updated_at=container.updated_at,
+        warehouse=container.warehouse,
         date_dropped_off=container.date_dropped_off,
         door=container.door,
         trucker_email=container.trucker_email,

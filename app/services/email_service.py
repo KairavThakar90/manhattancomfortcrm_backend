@@ -4,6 +4,45 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+EMAIL_SIGNATURE_HTML = """
+<br><br>
+<table cellpadding="0" cellspacing="0" border="0" style="margin-top: 30px; border-collapse: collapse; font-family: Arial, sans-serif; width: 100%; max-width: 600px;">
+    <tr>
+        <td style="background-color: #f4efeb; padding: 20px; text-align: center; vertical-align: middle; width: 40%;">
+            <a href="https://www.manhattancomfort.com">
+                <img src="https://www.manhattancomfort.com/cdn/shop/files/manhattan-comfort-logo-horizontal.png" alt="Manhattan Comfort" style="max-width: 150px; margin-bottom: 15px; border: none;" />
+            </a>
+            <br />
+            <!-- Social Icons -->
+            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/20/20673.png" width="22" alt="Facebook" style="border: none;" /></a>
+            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/1384/1384031.png" width="22" alt="Instagram" style="border: none;" /></a>
+            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/5969/5969020.png" width="22" alt="X" style="border: none;" /></a>
+            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/145/145808.png" width="22" alt="Pinterest" style="border: none;" /></a>
+            <a href="#" style="text-decoration: none; margin: 0 4px;"><img src="https://cdn-icons-png.flaticon.com/512/61/61109.png" width="22" alt="LinkedIn" style="border: none;" /></a>
+        </td>
+        <td style="background-color: #000000; color: #ffffff; padding: 25px 30px; vertical-align: middle; width: 60%;">
+            <h3 style="margin: 0 0 5px 0; font-size: 18px; color: #ffffff; font-weight: bold;">Manhattan Comfort</h3>
+            <h3 style="margin: 0 0 20px 0; font-size: 18px; color: #ffffff; font-weight: bold;">Team</h3>
+            
+            <table cellpadding="0" cellspacing="0" border="0" style="color: #ffffff; font-size: 12px; line-height: 1.5;">
+                <tr>
+                    <td style="padding-bottom: 8px; padding-right: 10px; font-size: 14px; text-align: center;">@</td>
+                    <td style="padding-bottom: 8px;"><a href="mailto:help@manhattancomfort.com" style="color: #ffffff; text-decoration: none;">help@manhattancomfort.com</a></td>
+                </tr>
+                <tr>
+                    <td style="padding-bottom: 8px; padding-right: 10px; font-size: 14px; text-align: center;">📱</td>
+                    <td style="padding-bottom: 8px;"><a href="tel:9088880818" style="color: #ffffff; text-decoration: none;">(908) 888-0818</a></td>
+                </tr>
+                <tr>
+                    <td style="padding-right: 10px; font-size: 14px; text-align: center;">🌐</td>
+                    <td><a href="https://www.manhattancomfort.com" style="color: #ffffff; text-decoration: none;">www.manhattancomfort.com</a></td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+"""
+
 conf = ConnectionConfig(
     MAIL_USERNAME=settings.SMTP_USER,
     MAIL_PASSWORD=settings.SMTP_PASS,
@@ -30,6 +69,7 @@ async def send_2fa_email(email_to: str, code: str, first_name: str = "User"):
             {code}
         </div>
         <p>This code will expire in 10 minutes. If you did not request this, please ignore this email.</p>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
     
@@ -89,6 +129,7 @@ async def send_tag_notification(
         
         <p>Click the button below to view it in the dashboard:</p>
         <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
 
@@ -153,6 +194,7 @@ async def send_welcome_email(email_to: str, password: str, login_link: str, firs
         <p>Please click the link below to log in, and we recommend changing your password after your first login.</p>
         <br>
         <a href="{login_link}" style="display: inline-block; padding: 10px 15px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">Log In to CRM</a>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
 
@@ -207,6 +249,7 @@ async def send_po_status_update_email(
         <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 12px; color: #999;">
             <p>This is an automated notification from the Manhattan Comfort Dashboard.</p>
         </div>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
 
@@ -233,6 +276,7 @@ async def send_container_emptied_notification(email_to: str, container_name: str
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
         <h2 style="color: #333;">Container Emptied Notification</h2>
         <p>Container <strong>{container_name}</strong> was emptied on <strong>{date_emptied}</strong>.</p>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
     
@@ -267,6 +311,7 @@ async def send_admin_new_user_notification(admin_emails: list, new_user_name: st
             <li><strong>Email:</strong> {new_user_email}</li>
             <li><strong>Role:</strong> {new_user_role}</li>
         </ul>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
     
@@ -301,6 +346,7 @@ async def send_delay_notification(emails: list, po_number: str, delay_type: str,
         <p>Purchase Order <strong>#{po_number}</strong> has just been flagged as <strong>{delay_type}</strong>.</p>
         {details_html}
         <p>Please log in to the system and provide a Delay Reason as soon as possible.</p>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
     
@@ -367,6 +413,7 @@ async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: 
         <ul>{shipment_list_html}</ul>
         
         <p style="margin-top: 20px;">Please log in to the dashboard to update these POs.</p>
+        {EMAIL_SIGNATURE_HTML}
     </div>
     """
     
