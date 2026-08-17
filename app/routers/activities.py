@@ -23,7 +23,11 @@ def get_activities(
     """
     query = db.query(models.UserActivityLog)
     
-    if user_id:
+    if current_user.role != "admin":
+        # Non-admins can only see their own activity
+        query = query.filter(models.UserActivityLog.user_id == current_user.id)
+    elif user_id:
+        # Admins can optionally filter by a specific user
         query = query.filter(models.UserActivityLog.user_id == user_id)
     
     if action:

@@ -56,6 +56,7 @@ class UserOut(BaseModel):
     notify_shipment_delayed: bool = False
     
     created_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
 
 
 class UserMentionOut(BaseModel):

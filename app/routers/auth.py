@@ -46,6 +46,8 @@ def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestFor
     if email == "googlecloudcron@manhattancomfort.com":
         access_token = auth_utils.create_access_token(data={"sub": str(user.id)})
         refresh_token = auth_utils.create_refresh_token(data={"sub": str(user.id)})
+        user.last_login = datetime.utcnow()
+        db.commit()
         log_activity(db, action="LOGIN_BYPASS_2FA", user_id=user.id, entity_type="USER", entity_id=str(user.id))
         return Token(
             access_token=access_token,
@@ -110,6 +112,8 @@ def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db)):
 
     access_token = auth_utils.create_access_token(data={"sub": str(user.id)})
     refresh_token = auth_utils.create_refresh_token(data={"sub": str(user.id)})
+    user.last_login = datetime.utcnow()
+    db.commit()
     log_activity(db, action="LOGIN_GOOGLE", user_id=user.id, entity_type="USER", entity_id=str(user.id))
     
     return Token(
@@ -136,9 +140,10 @@ def verify_2fa(request: Verify2FARequest, db: Session = Depends(get_db)):
     if user.otp_expires_at and datetime.utcnow() > user.otp_expires_at.replace(tzinfo=None):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA code expired")
 
-    # Clear OTP
+    # Clear OTP and update last_login
     user.otp_code = None
     user.otp_expires_at = None
+    user.last_login = datetime.utcnow()
     db.commit()
 
     access_token = auth_utils.create_access_token(data={"sub": str(user.id)})

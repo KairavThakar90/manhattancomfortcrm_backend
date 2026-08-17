@@ -39,6 +39,7 @@ class User(Base):
     otp_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime(timezone=True), nullable=True)
     
     vendor = relationship("Vendor")
     warehouse = relationship("Warehouse")
