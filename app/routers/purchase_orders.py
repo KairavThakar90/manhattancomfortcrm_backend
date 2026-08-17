@@ -577,7 +577,7 @@ async def add_po_comment(
         parent_id=parent_uuid
     )
     db.add(new_comment)
-    db.commit()
+    db.flush()
     db.refresh(new_comment)
     new_comment.user_name = current_user.full_name or current_user.email
     
@@ -796,7 +796,7 @@ async def add_po_item_comment(
         parent_id=parent_uuid
     )
     db.add(new_comment)
-    db.commit()
+    db.flush()
     db.refresh(new_comment)
     new_comment.user_name = current_user.full_name or current_user.email
     

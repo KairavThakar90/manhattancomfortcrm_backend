@@ -13,6 +13,48 @@ router = APIRouter(prefix="/cron", tags=["Cron Jobs"])
 
 CRON_SECRET = os.getenv("CRON_SECRET", "my-secret-cron-key")
 
+@router.post("/test-delays")
+async def test_delays(
+    background_tasks: BackgroundTasks,
+    weekly_digest: bool = Query(True, description="Send the weekly digest email for missing delay reasons"),
+    db: Session = Depends(get_db)
+):
+    """
+    Test endpoint for delay notifications. 
+    Sends the digest exclusively to projectmanager663@gmail.com.
+    """
+    active_pos = db.query(models.PurchaseOrder).filter(
+        models.PurchaseOrder.status.notin_(["SHIPPED", "COMPLETED", "CANCELED"])
+    ).all()
+
+    invoice_delayed_digest = []
+    shipment_delayed_digest = []
+
+    for po in active_pos:
+        po_out = PurchaseOrderOut.model_validate(po)
+        is_invoice_delayed = getattr(po_out, "is_invoice_delayed", "No") == "Yes"
+        is_shipment_delayed = getattr(po_out, "is_container_overdue", "No") == "Yes"
+        
+        # Collect digest info regardless of reason being filled or not for testing purposes
+        if is_invoice_delayed:
+            invoice_delayed_digest.append({"po": po, "delay_details": getattr(po_out, "delay_details", "")})
+        elif is_shipment_delayed:
+            shipment_delayed_digest.append({"po": po, "delay_details": getattr(po_out, "delay_details", "")})
+
+    target_email = "projectmanager663@gmail.com"
+    
+    if invoice_delayed_digest or shipment_delayed_digest:
+        background_tasks.add_task(
+            send_aggregated_delay_notification,
+            emails=[target_email],
+            invoice_delayed_pos=invoice_delayed_digest,
+            shipment_delayed_pos=shipment_delayed_digest,
+            is_weekly_digest=weekly_digest
+        )
+        return {"success": True, "message": f"Test email dispatched to {target_email}", "invoice_delays": len(invoice_delayed_digest), "shipment_delays": len(shipment_delayed_digest)}
+    
+    return {"success": True, "message": "No delayed POs found to send."}
+
 @router.post("/check-delays")
 async def check_delays(
     background_tasks: BackgroundTasks,

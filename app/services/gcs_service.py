@@ -28,10 +28,12 @@ async def upload_file_to_gcs(file_obj: bytes, original_filename: str, content_ty
     ext = original_filename.split(".")[-1] if "." in original_filename else ""
     unique_filename = f"attachments/{uuid.uuid4().hex}_{original_filename}"
     
+    from starlette.concurrency import run_in_threadpool
+    
     blob = bucket.blob(unique_filename)
     
-    # Upload the file bytes
-    blob.upload_from_string(file_obj, content_type=content_type)
+    # Upload the file bytes in a separate thread so it doesn't block the async event loop
+    await run_in_threadpool(blob.upload_from_string, file_obj, content_type=content_type)
     
     # Note: Uniform bucket-level access is enabled on this bucket.
     # The bucket itself has Storage Object Viewer permission for allUsers, 
