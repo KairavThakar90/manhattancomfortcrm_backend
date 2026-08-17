@@ -33,14 +33,9 @@ async def upload_file_to_gcs(file_obj: bytes, original_filename: str, content_ty
     # Upload the file bytes
     blob.upload_from_string(file_obj, content_type=content_type)
     
-    # Make the file publicly accessible as requested by the user
-    # Note: If uniform bucket-level access is enabled, making individual objects public might fail.
-    # In that case, the bucket itself should have Storage Object Viewer permission for allUsers.
-    # We will try to make it public, but if it fails due to uniform bucket-level access, 
-    # we just return the public URL which will work if the bucket is configured correctly.
-    try:
-        blob.make_public()
-    except Exception as e:
-        print(f"Could not make blob public individually (might be uniform bucket-level access): {e}")
+    # Note: Uniform bucket-level access is enabled on this bucket.
+    # The bucket itself has Storage Object Viewer permission for allUsers, 
+    # so we don't need to (and cannot) set individual objects to public.
+    # Just return the public URL directly!
 
     return blob.public_url

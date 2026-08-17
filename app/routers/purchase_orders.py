@@ -546,7 +546,10 @@ async def add_po_comment(
             pass
 
     if not comment:
-        raise HTTPException(status_code=400, detail="comment field is required")
+        if files:
+            comment = ""
+        else:
+            raise HTTPException(status_code=400, detail="comment field is required")
 
     try:
         if not tagged_user_ids or tagged_user_ids == "null":
@@ -763,7 +766,10 @@ async def add_po_item_comment(
             pass
 
     if not comment:
-        raise HTTPException(status_code=400, detail="comment field is required")
+        if files:
+            comment = ""
+        else:
+            raise HTTPException(status_code=400, detail="comment field is required")
         
     try:
         if not tagged_user_ids or tagged_user_ids == "null":
@@ -906,24 +912,35 @@ async def update_po_item_comment(
 
 
 def auto_sync_po_background(po_id: int):
-    import httpx
     import logging
+    import time
+    from app.database import SessionLocal
+    from app.models import User
+    
     logger = logging.getLogger(__name__)
+    db = SessionLocal()
     try:
         logger.info(f"Auto-syncing PO {po_id} in background...")
         # Give the server a moment to finish the current transaction
-        import time
         time.sleep(2)
         
+        # Fetch a system user to pass for activity logging
+        system_user = db.query(User).filter(User.email == "googlecloudcron@manhattancomfort.com").first()
+        if not system_user:
+            system_user = db.query(User).first()
+            
         # 1. Sync the single PO (to get updated totals)
-        httpx.post(f"http://127.0.0.1:8000/api/v1/purchase-orders/{po_id}/sync", timeout=30.0)
+        from app.routers.purchase_orders import trigger_single_po_sync, trigger_container_sync
+        trigger_single_po_sync(sellercloud_po_id=po_id, current_user=system_user, db=db)
         
         # 2. Sync containers
-        httpx.post(f"http://127.0.0.1:8000/api/v1/purchase-orders/{po_id}/sync-containers", timeout=60.0)
+        trigger_container_sync(sellercloud_po_id=po_id, db=db)
         
         logger.info(f"Auto-sync complete for PO {po_id}")
     except Exception as e:
         logger.error(f"Auto-sync failed for PO {po_id}: {e}")
+    finally:
+        db.close()
 
 @router.put("/items/{item_id}/quantity", response_model=POItemBasicOut)
 def update_po_item_quantity(
@@ -1870,11 +1887,6 @@ def trigger_single_po_sync(
             existing_po.vendor_id = vendor.id if vendor else None
             existing_po.warehouse_id = warehouse.id if warehouse else None
             po_row = existing_po
-            
-            # Delete existing items to re-create them
-            db.query(models.PurchaseOrderItem).filter(
-                models.PurchaseOrderItem.purchase_order_id == existing_po.id
-            ).delete()
         else:
             # Create new PO
             po_row = models.PurchaseOrder(
