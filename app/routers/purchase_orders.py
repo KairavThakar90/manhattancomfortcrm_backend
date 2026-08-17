@@ -610,11 +610,8 @@ async def add_po_comment(
         if len(file_bytes) > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
             
-        from app.services.gcs_service import generate_gcs_filename, upload_file_to_gcs_background
-        unique_filename, file_url = generate_gcs_filename(f.filename)
-        
-        # Dispatch upload to background
-        background_tasks.add_task(upload_file_to_gcs_background, file_bytes, unique_filename, f.content_type)
+        from app.services.gcs_service import upload_file_to_gcs
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
         
         att_model = models.PurchaseOrderCommentAttachment(
             comment_id=new_comment.id,
@@ -830,11 +827,8 @@ async def add_po_item_comment(
         if len(file_bytes) > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
             
-        from app.services.gcs_service import generate_gcs_filename, upload_file_to_gcs_background
-        unique_filename, file_url = generate_gcs_filename(f.filename)
-        
-        # Dispatch upload to background
-        background_tasks.add_task(upload_file_to_gcs_background, file_bytes, unique_filename, f.content_type)
+        from app.services.gcs_service import upload_file_to_gcs
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
         
         att_model = models.PurchaseOrderItemCommentAttachment(
             comment_id=new_comment.id,
