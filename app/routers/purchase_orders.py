@@ -252,27 +252,36 @@ def migrate_schema():
     
     results = []
     try:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS channels (
-                    id UUID PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL UNIQUE,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-            """))
-            results.append("Channels table created or already exists.")
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS channels (
+                        id UUID PRIMARY KEY,
+                        name VARCHAR(255) NOT NULL UNIQUE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """))
+                conn.commit()
+                results.append("Channels table created or already exists.")
+            except Exception as e:
+                conn.rollback()
+                results.append(f"channels table: {str(e)}")
             
             try:
                 conn.execute(text("ALTER TABLE purchase_orders ADD COLUMN channel_order_id VARCHAR(255) NULL;"))
+                conn.commit()
                 results.append("Added channel_order_id.")
             except Exception as e:
+                conn.rollback()
                 results.append(f"channel_order_id: {str(e)}")
 
             try:
                 conn.execute(text("ALTER TABLE purchase_orders ADD COLUMN channel_id UUID NULL;"))
+                conn.commit()
                 results.append("Added channel_id.")
             except Exception as e:
+                conn.rollback()
                 results.append(f"channel_id: {str(e)}")
 
             try:
@@ -281,8 +290,10 @@ def migrate_schema():
                     ADD CONSTRAINT fk_purchase_orders_channel_id 
                     FOREIGN KEY (channel_id) REFERENCES channels (id) ON DELETE SET NULL;
                 """))
+                conn.commit()
                 results.append("Added foreign key fk_purchase_orders_channel_id.")
             except Exception as e:
+                conn.rollback()
                 results.append(f"foreign key: {str(e)}")
                 
         return {"success": True, "details": results}
