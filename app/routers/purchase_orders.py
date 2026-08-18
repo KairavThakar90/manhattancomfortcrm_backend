@@ -938,7 +938,7 @@ def auto_sync_po_background(po_id: int):
     finally:
         db.close()
 
-@router.put("/items/{item_id}/quantity", response_model=POItemBasicOut)
+@router.patch("/items/{item_id}/quantity", response_model=POItemBasicOut)
 def update_po_item_quantity(
     item_id: str,
     update_data: POItemQuantityUpdate,
