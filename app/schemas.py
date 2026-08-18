@@ -176,6 +176,7 @@ class VendorSummary(BaseModel):
     id: uuid.UUID
     sellercloud_vendor_id: Optional[int] = None
     name: str
+    container_lead_time_days: Optional[int] = None
 
 
 class VendorUpdate(BaseModel):
