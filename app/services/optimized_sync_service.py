@@ -127,15 +127,43 @@ class OptimizedSyncService:
                     mapped["warehouse_id"] = warehouse.id if warehouse else None
                     
                     # Check if PO exists
+                    from app.services.sync_service import _extract_order_info_from_po_detail
+                    
                     existing_po = (
                         self.db.query(models.PurchaseOrder)
                         .filter(models.PurchaseOrder.sellercloud_po_id == mapped["sellercloud_po_id"])
                         .first()
                     )
                     
-                    from app.services.sync_service import _get_customer_id_from_po_detail
-                    customer_id = _get_customer_id_from_po_detail(self.db, detail)
-                    mapped["customer_id"] = customer_id
+                    if not existing_po or not existing_po.customer_id or not existing_po.channel_order_id:
+                        order_info = _extract_order_info_from_po_detail(self.db, detail)
+                        mapped["customer_id"] = order_info["customer_id"]
+                        mapped["channel_order_id"] = order_info["channel_order_id"]
+                        mapped["channel_id"] = order_info["channel_id"]
+                        
+                        # Fallback to Title
+                        if not mapped["customer_id"] or not mapped["channel_order_id"]:
+                            import re
+                            match = re.search(r'Order#\s*(\d+)', mapped.get("purchase_title", ""), re.IGNORECASE)
+                            if match:
+                                order_id = match.group(1)
+                                try:
+                                    from app.services.sellercloud_client import sellercloud_client
+                                    from app.services.sync_service import _get_customer_id_from_order_detail, _get_or_create_channel
+                                    order_detail = sellercloud_client.get_order(order_id)
+                                    if not mapped["customer_id"]:
+                                        mapped["customer_id"] = _get_customer_id_from_order_detail(self.db, order_detail)
+                                    order_details_block = order_detail.get("OrderDetails", {})
+                                    if not mapped["channel_order_id"]:
+                                        mapped["channel_order_id"] = order_details_block.get("OrderSourceOrderId")
+                                    if not mapped.get("channel_id"):
+                                        channel_name = order_details_block.get("OrderSource")
+                                        if channel_name:
+                                            channel = _get_or_create_channel(self.db, channel_name)
+                                            if channel:
+                                                mapped["channel_id"] = channel.id
+                                except Exception as e:
+                                    print(f"Fallback order fetch failed for PO {mapped['sellercloud_po_id']}: {e}")
                     
                     if existing_po:
                         # Update existing

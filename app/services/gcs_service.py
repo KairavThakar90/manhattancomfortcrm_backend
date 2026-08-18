@@ -39,12 +39,12 @@ async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, c
     
     from starlette.concurrency import run_in_threadpool
     import io
-    from PIL import Image
-
     def compress_and_upload(file_data: bytes, c_type: str, dest_blob):
-        # Compress image if applicable
+        # Compress image if applicable and Pillow is installed
         if c_type in ["image/jpeg", "image/jpg", "image/png"]:
             try:
+                from PIL import Image
+                import io
                 img = Image.open(io.BytesIO(file_data))
                 if img.mode in ("RGBA", "P") and c_type in ["image/jpeg", "image/jpg"]:
                     img = img.convert("RGB")
@@ -60,11 +60,15 @@ async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, c
                 else:
                     img.save(output, format=img_format, optimize=True)
                     
-                file_data = output.getvalue()
+                compressed_bytes = output.getvalue()
+                dest_blob.upload_from_string(compressed_bytes, content_type=c_type)
+                return
+            except ImportError:
+                print("Pillow not installed. Skipping image compression.")
             except Exception as e:
                 print(f"Failed to compress image: {e}")
                 
-        # Upload the processed file bytes
+        # Fallback to uploading original raw data
         dest_blob.upload_from_string(file_data, content_type=c_type)
 
     blob = bucket.blob(unique_filename)

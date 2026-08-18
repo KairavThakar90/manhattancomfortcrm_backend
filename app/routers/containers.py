@@ -1576,10 +1576,13 @@ def export_containers_csv(
                 
                 po_order_number = ""
                 if po and po.purchase_title:
-                    import re
-                    match = re.search(r'#(\d+)', po.purchase_title)
-                    if match:
-                        po_order_number = match.group(1)
+                    if "cloned from po" in po.purchase_title.lower():
+                        po_order_number = "Stock"
+                    else:
+                        import re
+                        match = re.search(r'#(\d+)', po.purchase_title)
+                        if match:
+                            po_order_number = match.group(1)
 
                 row_dict = {
                     "container_name": ctr.container_name or "",

@@ -13,7 +13,7 @@ from app.auth import get_current_user
 from app import models
 from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
 from app.services.email_service import send_tag_notification
-from app.services.sync_service import sync_purchase_orders, sync_containers
+from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
 from app.services.activity_service import log_activity
 
@@ -242,6 +242,23 @@ def get_status_counts(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/backfill-channels-customers")
+def trigger_backfill(background_tasks: BackgroundTasks):
+    """
+    Triggers a background task to backfill missing customer_id and channel_id
+    on all existing Purchase Orders.
+    """
+    def run_backfill():
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            backfill_po_customers(db)
+        finally:
+            db.close()
+            
+    background_tasks.add_task(run_backfill)
+    return {"message": "Background backfill task for Channels and Customers has been successfully triggered."}
+
 @router.get("")
 def list_purchase_orders(
     page: Optional[int] = Query(None, ge=1, description="Page number. Leave empty for all."),
@@ -257,6 +274,7 @@ def list_purchase_orders(
     date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
+    channel_id: Optional[str] = Query(None, description="Filter by local Channel UUID"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -282,6 +300,14 @@ def list_purchase_orders(
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
+    
+    if channel_id:
+        try:
+            import uuid
+            q = q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
+        except ValueError:
+            pass
+
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
         
@@ -354,7 +380,8 @@ def list_purchase_orders(
             models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}")),
             models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%")),
             models.PurchaseOrder.customer.has(models.Customer.first_name.ilike(f"{search}%")),
-            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%"))
+            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%")),
+            models.PurchaseOrder.channel.has(models.Channel.name.ilike(f"{search}%"))
         ]
         if search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
@@ -1002,6 +1029,7 @@ def get_filtered_pos(
     filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items. If not provided, returns all 4 categories."),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     customer_id: Optional[str] = Query(None, description="Filter by customer UUID or SC ID"),
+    channel_id: Optional[str] = Query(None, description="Filter by channel UUID"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1064,6 +1092,13 @@ def get_filtered_pos(
                 )
             else:
                 base_q = base_q.filter(models.PurchaseOrder.customer_id == customer_id)
+                
+        if channel_id:
+            try:
+                import uuid
+                base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
+            except ValueError:
+                pass
         
         # Helper function to create response object
         def create_category_response(data_list, total):
