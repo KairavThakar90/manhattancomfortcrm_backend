@@ -242,6 +242,53 @@ def get_status_counts(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/migrate-channels-schema")
+def migrate_schema():
+    """
+    Temporary endpoint to apply the channels schema migration to the live database.
+    """
+    from sqlalchemy import text
+    from app.database import engine
+    
+    results = []
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS channels (
+                    id UUID PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            results.append("Channels table created or already exists.")
+            
+            try:
+                conn.execute(text("ALTER TABLE purchase_orders ADD COLUMN channel_order_id VARCHAR(255) NULL;"))
+                results.append("Added channel_order_id.")
+            except Exception as e:
+                results.append(f"channel_order_id: {str(e)}")
+
+            try:
+                conn.execute(text("ALTER TABLE purchase_orders ADD COLUMN channel_id UUID NULL;"))
+                results.append("Added channel_id.")
+            except Exception as e:
+                results.append(f"channel_id: {str(e)}")
+
+            try:
+                conn.execute(text("""
+                    ALTER TABLE purchase_orders 
+                    ADD CONSTRAINT fk_purchase_orders_channel_id 
+                    FOREIGN KEY (channel_id) REFERENCES channels (id) ON DELETE SET NULL;
+                """))
+                results.append("Added foreign key fk_purchase_orders_channel_id.")
+            except Exception as e:
+                results.append(f"foreign key: {str(e)}")
+                
+        return {"success": True, "details": results}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @router.post("/backfill-channels-customers")
 def trigger_backfill(background_tasks: BackgroundTasks):
     """

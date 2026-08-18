@@ -348,6 +348,7 @@ def _get_customer_id_from_order_detail(db: Session, order_detail: dict) -> Optio
 def _get_or_create_channel(db: Session, channel_name: str) -> Optional[models.Channel]:
     if not channel_name:
         return None
+    channel_name = str(channel_name)
     channel = db.query(models.Channel).filter(models.Channel.name == channel_name).first()
     if not channel:
         import uuid
