@@ -333,6 +333,7 @@ def list_purchase_orders(
     date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
     channel_id: Optional[str] = Query(None, description="Filter by local Channel UUID"),
+    channel_order_id: Optional[str] = Query(None, description="Filter by explicit Channel Order ID (e.g. 'Schuchman')"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -365,6 +366,9 @@ def list_purchase_orders(
             q = q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
         except ValueError:
             pass
+            
+    if channel_order_id:
+        q = q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{channel_order_id}%"))
 
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
@@ -439,7 +443,8 @@ def list_purchase_orders(
             models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%")),
             models.PurchaseOrder.customer.has(models.Customer.first_name.ilike(f"{search}%")),
             models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%")),
-            models.PurchaseOrder.channel.has(models.Channel.name.ilike(f"{search}%"))
+            models.PurchaseOrder.channel.has(models.Channel.name.ilike(f"{search}%")),
+            models.PurchaseOrder.channel_order_id.ilike(f"{search}%")
         ]
         if search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
@@ -1965,6 +1970,44 @@ def trigger_single_po_sync(
         warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
         warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
         
+        # Extract channel and customer info dynamically
+        from app.services.sync_service import _extract_order_info_from_po_detail, _get_or_create_channel
+        order_info = _extract_order_info_from_po_detail(db, detail)
+        
+        customer_id = order_info["customer_id"]
+        channel_order_id = order_info["channel_order_id"]
+        channel_id = order_info["channel_id"]
+        
+        # Fallback for channel info if missing from RelatedItems
+        if (not customer_id or not channel_order_id) and mapped.get("purchase_title"):
+            try:
+                import re
+                match = re.search(r"Created for Order#\s*(\d+)", mapped["purchase_title"])
+                if match:
+                    order_id = match.group(1)
+                    order_detail = sellercloud_client.get_order_detail(order_id)
+                    if order_detail:
+                        if not customer_id:
+                            customer_email = order_detail.get("CustomerEmail")
+                            if customer_email:
+                                from app.services.sync_service import _get_or_create_customer
+                                customer = _get_or_create_customer(db, {"CustomerEmail": customer_email})
+                                if customer:
+                                    customer_id = customer.id
+                        
+                        order_details_block = order_detail.get("OrderDetails", {})
+                        if not channel_order_id:
+                            channel_order_id = order_details_block.get("OrderSourceOrderId")
+                        if not channel_id:
+                            from app.services.sync_service import _get_channel_name_from_order
+                            channel_name = _get_channel_name_from_order(order_detail)
+                            if channel_name and channel_name != "Unknown":
+                                channel = _get_or_create_channel(db, channel_name)
+                                if channel:
+                                    channel_id = channel.id
+            except Exception as e:
+                print(f"Fallback order fetch failed for PO {sellercloud_po_id}: {e}")
+
         # Upsert the PO
         existing_po = (
             db.query(models.PurchaseOrder)
@@ -1979,6 +2022,14 @@ def trigger_single_po_sync(
             existing_po.company_id = company.id if company else None
             existing_po.vendor_id = vendor.id if vendor else None
             existing_po.warehouse_id = warehouse.id if warehouse else None
+            
+            if customer_id:
+                existing_po.customer_id = customer_id
+            if channel_order_id:
+                existing_po.channel_order_id = channel_order_id
+            if channel_id:
+                existing_po.channel_id = channel_id
+                
             po_row = existing_po
         else:
             # Create new PO
@@ -1986,7 +2037,10 @@ def trigger_single_po_sync(
                 **mapped,
                 company_id=company.id if company else None,
                 vendor_id=vendor.id if vendor else None,
-                warehouse_id=warehouse.id if warehouse else None
+                warehouse_id=warehouse.id if warehouse else None,
+                customer_id=customer_id,
+                channel_order_id=channel_order_id,
+                channel_id=channel_id
             )
             db.add(po_row)
         
@@ -2529,12 +2583,4 @@ def trigger_sync_customers(db: Session = Depends(get_db)):
         return {"success": False, "error": str(e)}
 
 
-@router.post("/sync/backfill-po-customers")
-def trigger_backfill_po_customers(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    Backfill customer_id for all existing Purchase Orders. 
-    Runs in the background.
-    """
-    from app.services.sync_service import backfill_po_customers
-    background_tasks.add_task(backfill_po_customers, db)
-    return {"success": True, "message": "Backfill started in the background. Check logs for progress."}
+

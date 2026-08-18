@@ -157,8 +157,9 @@ class OptimizedSyncService:
                                     if not mapped["channel_order_id"]:
                                         mapped["channel_order_id"] = order_details_block.get("OrderSourceOrderId")
                                     if not mapped.get("channel_id"):
-                                        channel_name = order_details_block.get("OrderSource")
-                                        if channel_name:
+                                        from app.services.sync_service import _get_channel_name_from_order
+                                        channel_name = _get_channel_name_from_order(order_detail)
+                                        if channel_name and channel_name != "Unknown":
                                             channel = _get_or_create_channel(self.db, channel_name)
                                             if channel:
                                                 mapped["channel_id"] = channel.id
