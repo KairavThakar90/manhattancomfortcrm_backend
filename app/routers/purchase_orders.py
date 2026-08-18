@@ -317,6 +317,17 @@ def trigger_backfill(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_backfill)
     return {"message": "Background backfill task for Channels and Customers has been successfully triggered."}
 
+@router.get("/channel-order-ids", response_model=List[str])
+def list_channel_order_ids(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    List all distinct channel order IDs (e.g., 'Schuchman', 'NEWMARK / GUTTMAN - LAKEWOOD')
+    for dropdowns and filtering.
+    """
+    results = db.query(models.PurchaseOrder.channel_order_id).filter(
+        models.PurchaseOrder.channel_order_id != None
+    ).distinct().order_by(models.PurchaseOrder.channel_order_id).all()
+    return [r[0] for r in results if r[0]]
+
 @router.get("")
 def list_purchase_orders(
     page: Optional[int] = Query(None, ge=1, description="Page number. Leave empty for all."),
