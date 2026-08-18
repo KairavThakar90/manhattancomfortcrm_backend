@@ -376,7 +376,7 @@ def list_purchase_orders(
             import uuid
             q = q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
         except ValueError:
-            pass
+            q = q.filter(models.PurchaseOrder.id == uuid.uuid4())  # Return empty if invalid UUID
             
     if channel_order_id:
         q = q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{channel_order_id}%"))
@@ -1172,7 +1172,7 @@ def get_filtered_pos(
                 import uuid
                 base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
             except ValueError:
-                pass
+                base_q = base_q.filter(models.PurchaseOrder.id == uuid.uuid4())
         
         # Helper function to create response object
         def create_category_response(data_list, total):
