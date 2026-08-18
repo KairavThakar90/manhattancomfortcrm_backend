@@ -2,6 +2,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 import csv
 import io
+import uuid
 
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile, Request
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,17 @@ from app.services.optimized_sync_service import OptimizedSyncService, get_sync_r
 from app.services.activity_service import log_activity
 
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
+
+
+def po_id_filter_clause(po_id: str):
+    """Resolve a path-supplied PO identifier (UUID, raw SellerCloud int ID, or "PO-<id>") to a filter clause."""
+    raw_id = po_id[3:] if po_id.upper().startswith("PO-") else po_id
+    try:
+        return models.PurchaseOrder.id == uuid.UUID(raw_id)
+    except ValueError:
+        if raw_id.isdigit():
+            return models.PurchaseOrder.sellercloud_po_id == int(raw_id)
+        raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID, SellerCloud integer ID, or 'PO-<id>'.")
 
 
 async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, section="Purchase Orders", po_number=None, sku=None, comment_text="", attachments=None):
@@ -61,7 +73,6 @@ async def process_comment_tags(db, tagged_user_ids, commenter_name, link, backgr
             comment_text=comment_text,
             attachments=attachments
         )
-
 
 
 @router.get("/filters/all-categories")
@@ -458,15 +469,7 @@ def list_purchase_orders(
 
 @router.get("/{po_id}", response_model=PurchaseOrderOut)
 def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
-    import uuid
-    try:
-        po_uuid = uuid.UUID(po_id)
-        filter_clause = models.PurchaseOrder.id == po_uuid
-    except ValueError:
-        if po_id.isdigit():
-            filter_clause = models.PurchaseOrder.sellercloud_po_id == int(po_id)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+    filter_clause = po_id_filter_clause(po_id)
 
     po = (
         db.query(models.PurchaseOrder)
@@ -511,27 +514,19 @@ async def add_po_comment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    import uuid
     import json
     from app.config import settings
     from app.services.gcs_service import upload_file_to_gcs
-    try:
-        po_uuid = uuid.UUID(po_id)
-        filter_clause = models.PurchaseOrder.id == po_uuid
-    except ValueError:
-        if po_id.isdigit():
-            filter_clause = models.PurchaseOrder.sellercloud_po_id == int(po_id)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+    filter_clause = po_id_filter_clause(po_id)
 
     po = db.query(models.PurchaseOrder).filter(filter_clause).first()
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
-        
+
     if current_user.role == "vendor":
         if str(po.vendor_id) != str(current_user.vendor_id):
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
-            
+
     if not comment:
         try:
             body = await request.json()
@@ -710,7 +705,7 @@ def get_po_item_comments(
     item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
- 
+
     comments = (
         db.query(models.PurchaseOrderItemComment)
         .options(joinedload(models.PurchaseOrderItemComment.user))
@@ -721,6 +716,7 @@ def get_po_item_comments(
     for comment in comments:
         comment.user_name = comment.user.full_name or comment.user.email if comment.user else None
     return comments
+
 
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
 async def add_po_item_comment(
@@ -2148,143 +2144,162 @@ def export_multiple_pos_csv(
     db: Session = Depends(get_db)
 ):
     """
-    Export POs to a single CSV file.
-    Can be filtered by a list of PO IDs or by a specific filter status.
-    Columns can be customized.
-    """
-    from datetime import timezone, timedelta
-    from sqlalchemy import and_
-    cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
-    today = datetime.now(timezone.utc).date()
+    Export multiple POs to a single CSV file.
 
-    base_q = (
-        db.query(models.PurchaseOrder)
-        .options(
-            joinedload(models.PurchaseOrder.items)
-                .joinedload(models.PurchaseOrderItem.container_links)
-                .joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor),
-            joinedload(models.PurchaseOrder.comments),
-            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
-            joinedload(models.PurchaseOrder.comments)
-                .joinedload(models.PurchaseOrderComment.user)
-        )
+    Provide a list of SellerCloud PO IDs (or internal PO UUIDs) to export, or a
+    "filter_status" (invoice_delayed, delivery_delayed, lefts_items) to export a
+    predefined category. Omit both "po_ids" and "filter_status" to export all
+    purchase orders. Optionally provide "columns" to select/order a subset of
+    columns (see PO_EXPORT_COLUMNS for valid names) - if only PO-level columns
+    are selected, one row is written per PO; otherwise one row is written per
+    line item.
+
+    Example: POST /api/v1/purchase-orders/export/csv
+    Body: {"po_ids": [11880, 11881, 11882], "columns": ["PO ID", "Vendor", "Total Amount"]}
+
+    Returns a downloadable CSV file.
+    """
+    po_ids = request_data.po_ids
+
+    query = db.query(models.PurchaseOrder).options(
+        joinedload(models.PurchaseOrder.items)
+            .joinedload(models.PurchaseOrderItem.container_links)
+            .joinedload(models.PurchaseOrderItemContainer.container),
+        joinedload(models.PurchaseOrder.vendor),
+        joinedload(models.PurchaseOrder.comments),
+        joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
+        joinedload(models.PurchaseOrder.comments)
+            .joinedload(models.PurchaseOrderComment.user)
     )
 
-    if request_data.po_ids:
-        pos = base_q.filter(models.PurchaseOrder.sellercloud_po_id.in_(request_data.po_ids)).all()
-    else:
+    if po_ids:
+        sellercloud_ids = [i for i in po_ids if isinstance(i, int)]
+        uuid_ids = [i for i in po_ids if isinstance(i, uuid.UUID)]
+        query = query.filter(
+            or_(
+                models.PurchaseOrder.sellercloud_po_id.in_(sellercloud_ids) if sellercloud_ids else False,
+                models.PurchaseOrder.id.in_(uuid_ids) if uuid_ids else False,
+            )
+        )
+        pos = query.all()
+    elif request_data.filter_status:
+        from datetime import timezone
+        cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
+        today = datetime.now(timezone.utc).date()
+
         status = request_data.filter_status
-        if not status or status.lower() == 'all':
-            pos = base_q.order_by(models.PurchaseOrder.created_on.desc()).all()
-        elif status == 'invoice_delayed':
-            pos = base_q.filter(
+        if not status or status.lower() == "all":
+            pos = query.order_by(models.PurchaseOrder.created_on.desc()).all()
+        elif status == "invoice_delayed":
+            pos = query.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.is_(None),
                     models.PurchaseOrder.created_on <= cutoff_10_days
                 )
             ).order_by(models.PurchaseOrder.created_on.asc()).all()
-        elif status == 'delivery_delayed':
-            q = base_q.filter(
+        elif status == "delivery_delayed":
+            candidates = query.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.isnot(None),
                     models.PurchaseOrder.container_lead_time_days.isnot(None)
                 )
             ).all()
-            pos = [p for p in q if p.invoice_date and p.container_lead_time_days and (p.invoice_date.date() + timedelta(days=p.container_lead_time_days)) < today]
-        elif status == 'lefts_items':
-            q = base_q.join(models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id).distinct().all()
-            pos = []
-            for po in q:
-                po_model = PurchaseOrderOut.model_validate(po)
-                if po_model.total_qty_remaining and po_model.total_qty_remaining > 0:
-                    pos.append(po)
+            pos = [
+                p for p in candidates
+                if p.invoice_date and p.container_lead_time_days
+                and (p.invoice_date.date() + timedelta(days=p.container_lead_time_days)) < today
+            ]
+        elif status == "lefts_items":
+            candidates = query.join(
+                models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id
+            ).distinct().all()
+            pos = [
+                p for p in candidates
+                if sum(item.qty_ordered - item.qty_received for item in p.items) > 0
+            ]
         else:
-            raise HTTPException(status_code=400, detail="Invalid filter_status")
+            raise HTTPException(status_code=400, detail="Invalid filter_status. Must be invoice_delayed, delivery_delayed, or lefts_items")
+    else:
+        pos = query.all()
 
     if not pos:
-        raise HTTPException(status_code=404, detail="No POs found")
+        raise HTTPException(status_code=404, detail="No POs found with provided criteria")
 
-    output = io.StringIO()
-    writer = csv.writer(output)
+    def lead_time_of(po):
+        return po.container_lead_time_days if po.container_lead_time_days is not None else (po.vendor.container_lead_time_days if po.vendor else "")
 
-    # Column mapping logic
-    def get_container_info(item):
-        if not getattr(item, 'container_links', None):
-            return "", ""
-        containers = [link.container for link in item.container_links if link.container]
-        if not containers:
-            return "", ""
+    def container_info_of(item):
+        containers = [link.container for link in (item.container_links or []) if link.container]
         name = ", ".join([c.container_name or "" for c in containers])
-        eta = ", ".join([c.estimated_arrival_date.isoformat() if getattr(c, 'estimated_arrival_date', None) else "" for c in containers])
+        eta = ", ".join([c.estimated_arrival_date.isoformat() if c.estimated_arrival_date else "" for c in containers])
         return name, eta
 
-    column_map = {
-        "PO ID": lambda p, i, c_name, c_eta: p.sellercloud_po_id,
-        "PO Title": lambda p, i, c_name, c_eta: p.purchase_title or "",
-        "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
-        "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
-        "Receiving Status": lambda p, i, c_name, c_eta: p.receiving_status_code or "",
-        "Created On": lambda p, i, c_name, c_eta: p.created_on.isoformat() if p.created_on else "",
-        "Date Ordered": lambda p, i, c_name, c_eta: p.date_ordered.isoformat() if p.date_ordered else "",
-        "Expected Delivery": lambda p, i, c_name, c_eta: p.expected_delivery_date.isoformat() if p.expected_delivery_date else "",
-        "Invoice Date": lambda p, i, c_name, c_eta: p.invoice_date.isoformat() if p.invoice_date else "",
-        "Lead Time (days)": lambda p, i, c_name, c_eta: p.container_lead_time_days if p.container_lead_time_days is not None else (p.vendor.container_lead_time_days if p.vendor else ""),
-        "Total Amount": lambda p, i, c_name, c_eta: p.total_amount or 0,
-        "Currency": lambda p, i, c_name, c_eta: p.currency or "USD",
-        "Item ID": lambda p, i, c_name, c_eta: i.sellercloud_item_id or "" if i else "",
-        "SKU": lambda p, i, c_name, c_eta: i.sku or "" if i else "",
-        "Product Name": lambda p, i, c_name, c_eta: i.product_name or "" if i else "",
-        "Qty Ordered": lambda p, i, c_name, c_eta: i.qty_ordered or 0 if i else "",
-        "Qty Received": lambda p, i, c_name, c_eta: i.qty_received or 0 if i else "",
-        "Qty in Container": lambda p, i, c_name, c_eta: i.qty_in_container or 0 if i else "",
-        "Unit Price": lambda p, i, c_name, c_eta: i.unit_price or 0 if i else "",
-        "Cases Ordered": lambda p, i, c_name, c_eta: i.qty_cases_ordered or 0 if i else "",
-        "Units per Case": lambda p, i, c_name, c_eta: i.qty_units_per_case or 0 if i else "",
-        "Case Price": lambda p, i, c_name, c_eta: i.case_price or 0 if i else "",
-        "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.isoformat() if i and i.expected_delivery_date else "",
-        "Container Name": lambda p, i, c_name, c_eta: c_name,
-        "Container ETA": lambda p, i, c_name, c_eta: c_eta,
-        "Notes": lambda p, i, c_name, c_eta: p.notes or "",
-        "Comments": lambda p, i, c_name, c_eta: " | ".join(
-            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in p.comments]
-        ) if getattr(p, "comments", None) else ""
+    # column name -> (is_item_level, extractor(po, item))
+    PO_EXPORT_COLUMNS = {
+        "PO ID": (False, lambda po, item: po.sellercloud_po_id),
+        "PO Title": (False, lambda po, item: po.purchase_title or ""),
+        "Vendor": (False, lambda po, item: po.vendor.name if po.vendor else ""),
+        "Status Code": (False, lambda po, item: po.purchase_order_status_code or ""),
+        "Receiving Status": (False, lambda po, item: po.receiving_status_code or ""),
+        "Created On": (False, lambda po, item: po.created_on.isoformat() if po.created_on else ""),
+        "Date Ordered": (False, lambda po, item: po.date_ordered.isoformat() if po.date_ordered else ""),
+        "Expected Delivery": (False, lambda po, item: po.expected_delivery_date.isoformat() if po.expected_delivery_date else ""),
+        "Invoice Date": (False, lambda po, item: po.invoice_date.isoformat() if po.invoice_date else ""),
+        "Lead Time (days)": (False, lambda po, item: lead_time_of(po)),
+        "Total Amount": (False, lambda po, item: po.total_amount or 0),
+        "Currency": (False, lambda po, item: po.currency or "USD"),
+        "Item ID": (True, lambda po, item: item.sellercloud_item_id or ""),
+        "SKU": (True, lambda po, item: item.sku or ""),
+        "Product Name": (True, lambda po, item: item.product_name or ""),
+        "Qty Ordered": (True, lambda po, item: item.qty_ordered or 0),
+        "Qty Received": (True, lambda po, item: item.qty_received or 0),
+        "Qty in Container": (True, lambda po, item: item.qty_in_container or 0),
+        "Unit Price": (True, lambda po, item: item.unit_price or 0),
+        "Cases Ordered": (True, lambda po, item: item.qty_cases_ordered or 0),
+        "Units per Case": (True, lambda po, item: item.qty_units_per_case or 0),
+        "Case Price": (True, lambda po, item: item.case_price or 0),
+        "Item Expected Delivery": (True, lambda po, item: item.expected_delivery_date.isoformat() if item.expected_delivery_date else ""),
+        "Container Name": (True, lambda po, item: container_info_of(item)[0]),
+        "Container ETA": (True, lambda po, item: container_info_of(item)[1]),
+        "Notes": (False, lambda po, item: po.notes or ""),
+        "Comments": (False, lambda po, item: " | ".join(
+            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
+        ) if getattr(po, "comments", None) else ""),
     }
 
-    all_cols = list(column_map.keys())
-    selected_cols = request_data.columns if request_data.columns else all_cols
-    
-    # Filter out invalid columns
-    selected_cols = [c for c in selected_cols if c in column_map]
-    
-    writer.writerow(selected_cols)
-    
-    item_specific_cols = {
-        "Item ID", "SKU", "Product Name", "Qty Ordered", "Qty Received", 
-        "Qty in Container", "Unit Price", "Cases Ordered", "Units per Case", 
-        "Case Price", "Item Expected Delivery", "Container Name", "Container ETA"
-    }
-    
-    requires_items = any(col in item_specific_cols for col in selected_cols)
-    
+    if request_data.columns:
+        unknown = [c for c in request_data.columns if c not in PO_EXPORT_COLUMNS]
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Unknown column(s): {unknown}. Valid columns: {list(PO_EXPORT_COLUMNS.keys())}")
+        selected_columns = request_data.columns
+    else:
+        selected_columns = list(PO_EXPORT_COLUMNS.keys())
+
+    needs_item_rows = any(PO_EXPORT_COLUMNS[c][0] for c in selected_columns)
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(selected_columns)
+
     for po in pos:
-        if not po.items or not requires_items:
-            # Only output one row per PO if no item-level data is requested (or if PO has no items)
-            row = [column_map[col](po, None, "", "") for col in selected_cols]
-            writer.writerow(row)
-        else:
+        if needs_item_rows and po.items:
             for idx, item in enumerate(po.items):
-                c_name, c_eta = get_container_info(item)
-                row = [column_map[col](po, item, c_name, c_eta) for col in selected_cols]
-                
+                row = [PO_EXPORT_COLUMNS[c][1](po, item) for c in selected_columns]
                 # Blank out Notes for subsequent items to avoid duplication
-                if idx > 0 and "Notes" in selected_cols:
-                    notes_idx = selected_cols.index("Notes")
-                    row[notes_idx] = ""
-                    
+                if idx > 0 and "Notes" in selected_columns:
+                    row[selected_columns.index("Notes")] = ""
                 writer.writerow(row)
+        else:
+            writer.writerow([
+                "" if PO_EXPORT_COLUMNS[c][0] else PO_EXPORT_COLUMNS[c][1](po, None)
+                for c in selected_columns
+            ])
 
+    # Prepare response
     output.seek(0)
+    filename = f"POs_{len(pos)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",

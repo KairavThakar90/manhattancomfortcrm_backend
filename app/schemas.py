@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List, Union, Dict, Any
 
-from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field, AliasChoices
 
 
 # ---------- Auth ----------
@@ -496,9 +496,13 @@ class PurchaseOrderItemOut(BaseModel):
 
 
 class POCommentCreate(BaseModel):
-    comment: str
+    comment: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("comment", "text", "message", "content"),
+    )
     parent_id: Optional[uuid.UUID] = None
     tagged_user_ids: List[uuid.UUID] = []
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class POCommentUpdate(BaseModel):
@@ -809,9 +813,9 @@ class SyncResponse(BaseModel):
 
 
 class POExportRequest(BaseModel):
-    po_ids: Optional[list[int]] = None
-    filter_status: Optional[str] = Field(None, description="invoice_delayed, delivery_delayed, or lefts_items")
-    columns: Optional[list[str]] = Field(None, description="List of columns to export. If empty, all columns are exported.")
+    po_ids: Optional[List[Union[int, uuid.UUID]]] = Field(default=None, description="SellerCloud PO IDs (int) or internal PO UUIDs. Omit to export all purchase orders.")
+    filter_status: Optional[str] = Field(default=None, description="invoice_delayed, delivery_delayed, or lefts_items")
+    columns: Optional[List[str]] = Field(default=None, description="Subset/order of column names to include. Omit to include all columns.")
 
 class ValidateContainerRowRequest(BaseModel):
     po_id: str
