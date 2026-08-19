@@ -13,7 +13,8 @@ from app import models, schemas
 from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
-    ContainerUpdate, ContainerAddItems, ContainerActivityCreate, UserActivityLogOut, PaginatedResponse
+    ContainerUpdate, ContainerAddItems, ContainerActivityCreate, ContainerAttachmentOut,
+    UserActivityLogOut, PaginatedResponse
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
