@@ -3,6 +3,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.concurrency import run_in_threadpool
 from jose import jwt
 import asyncio
+import time
+
+# In-memory cache to debounce duplicate logs from frontend rapid requests
+_last_logged = {}
 
 from app.config import settings
 from app.database import SessionLocal
@@ -49,6 +53,19 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
 
         # Skip login/logout as they might already be logged manually in auth routes,
         # but the middleware ensures everything is captured. We'll leave it in.
+
+        # 2.5 Debounce logic for GET requests to prevent duplicate logs from rapid frontend calls
+        if method == "GET":
+            cache_key = f"{user_id}_{action}_{entity_id}"
+            current_time = time.time()
+            if cache_key in _last_logged:
+                if current_time - _last_logged[cache_key] < 10.0:  # Ignore identical GET actions within 10 seconds
+                    return
+            _last_logged[cache_key] = current_time
+
+            # Cleanup cache occasionally to prevent memory leak
+            if len(_last_logged) > 10000:
+                _last_logged.clear()
 
         # 3. Log to DB using a fresh session
         def log_to_db():

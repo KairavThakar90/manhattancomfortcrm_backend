@@ -13,6 +13,9 @@ router = APIRouter(prefix="/activities", tags=["Activities"])
 def get_activities(
     user_id: Optional[uuid.UUID] = Query(None, description="Filter logs by a specific user"),
     action: Optional[str] = Query(None, description="Filter by action type (e.g. LOGIN)"),
+    category: Optional[str] = Query(None, description="Filter by category (e.g. SHIPPING)"),
+    entity_type: Optional[str] = Query(None, description="Filter by entity type (e.g. PURCHASE_ORDER)"),
+    entity_id: Optional[str] = Query(None, description="Filter by entity ID"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
     current_user: models.User = Depends(get_current_user),
@@ -32,6 +35,12 @@ def get_activities(
     
     if action:
         query = query.filter(models.UserActivityLog.action == action)
+    if category:
+        query = query.filter(models.UserActivityLog.category == category)
+    if entity_type:
+        query = query.filter(models.UserActivityLog.entity_type == entity_type)
+    if entity_id:
+        query = query.filter(models.UserActivityLog.entity_id == entity_id)
         
     total_count = query.count()
     total_pages = (total_count + size - 1) // size
@@ -80,11 +89,16 @@ def create_activity(
     """
     Log a custom user activity from the frontend (e.g. clicking a button, viewing a page).
     """
+    # Ignore read-only navigation actions to reduce database load
+    if activity.action.startswith("VIEW_") or activity.action.startswith("GET_"):
+        return {"status": "success", "message": "Ignored read-only activity"}
+
     from app.services.activity_service import log_activity
     log_activity(
         db=db,
         action=activity.action,
         user_id=current_user.id,
+        category=activity.category,
         entity_type=activity.entity_type,
         entity_id=activity.entity_id,
         details=activity.details

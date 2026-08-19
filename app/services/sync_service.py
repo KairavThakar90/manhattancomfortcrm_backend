@@ -345,8 +345,54 @@ def _get_customer_id_from_order_detail(db: Session, order_detail: dict) -> Optio
         db.flush()
         return new_customer.id
 
-def _get_customer_id_from_po_detail(db: Session, detail: dict) -> Optional[uuid.UUID]:
-    """Extracts OrderID from PO detail, fetches Order, and returns local customer UUID."""
+def _get_or_create_channel(db: Session, channel_name: str) -> Optional[models.Channel]:
+    if not channel_name:
+        return None
+    channel_name = str(channel_name)
+    channel = db.query(models.Channel).filter(models.Channel.name == channel_name).first()
+    if not channel:
+        import uuid
+        channel = models.Channel(id=uuid.uuid4(), name=channel_name)
+        db.add(channel)
+        db.flush()
+    return channel
+
+ORDER_SOURCE_MAP = {
+    0: "Wholesale",
+    1: "Amazon",
+    2: "eBay",
+    4: "Website",
+    5: "Magento",
+    8: "Overstock",
+    11: "Target",
+    14: "Newegg",
+    21: "Wayfair",
+    23: "Walmart",
+    24: "Shopify",
+    32: "Jet",
+    44: "Houzz",
+    62: "Home Depot",
+    109: "Macy's",
+    114: "Lowe's"
+}
+
+def _get_channel_name_from_order(order_detail: dict) -> str:
+    """Extract human-readable channel name from SellerCloud order JSON."""
+    if order_detail.get("IsWholeSaleOrder"):
+        return "Wholesale"
+        
+    order_source = order_detail.get("OrderDetails", {}).get("OrderSource")
+    if order_source is not None:
+        try:
+            source_int = int(order_source)
+            return ORDER_SOURCE_MAP.get(source_int, str(source_int))
+        except (ValueError, TypeError):
+            return str(order_source)
+            
+    return "Unknown"
+
+def _extract_order_info_from_po_detail(db: Session, detail: dict) -> dict:
+    """Extracts OrderID from PO detail, fetches Order, and returns customer_id, channel_order_id, channel_id."""
     related_items = detail.get("RelatedItems") or []
     order_id = None
     for item in related_items:
@@ -355,21 +401,45 @@ def _get_customer_id_from_po_detail(db: Session, detail: dict) -> Optional[uuid.
             break
             
     if not order_id:
-        return None
+        return {"customer_id": None, "channel_order_id": None, "channel_id": None}
         
     try:
         from app.services.sellercloud_client import sellercloud_client
         order_detail = sellercloud_client.get_order(order_id)
-        return _get_customer_id_from_order_detail(db, order_detail)
+        
+        customer_id = _get_customer_id_from_order_detail(db, order_detail)
+        
+        order_details_block = order_detail.get("OrderDetails", {})
+        channel_order_id = order_details_block.get("OrderSourceOrderId")
+        channel_name = _get_channel_name_from_order(order_detail)
+        
+        channel_id = None
+        if channel_name and channel_name != "Unknown":
+            channel = _get_or_create_channel(db, channel_name)
+            if channel:
+                channel_id = channel.id
+        
+        return {
+            "customer_id": customer_id,
+            "channel_order_id": channel_order_id,
+            "channel_id": channel_id
+        }
     except Exception as e:
-        print(f"Error fetching customer for Order {order_id}: {e}")
-        return None
+        print(f"Error fetching order info for Order {order_id}: {e}")
+        return {"customer_id": None, "channel_order_id": None, "channel_id": None}
 
 
 def backfill_po_customers(db: Session):
     """One-time background task to backfill customer_id for all existing POs."""
     import time
-    pos = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.customer_id == None).all()
+    from sqlalchemy import or_
+    pos = db.query(models.PurchaseOrder).filter(
+        or_(
+            models.PurchaseOrder.customer_id == None,
+            models.PurchaseOrder.channel_id == None,
+            models.PurchaseOrder.channel_order_id == None
+        )
+    ).all()
     total_pos = len(pos)
     print(f"Starting backfill for {total_pos} POs...")
     count = 0
@@ -381,7 +451,10 @@ def backfill_po_customers(db: Session):
             detail = po.raw_json or {}
             
             # Use existing function which looks for RelatedItems in the dict
-            customer_id = _get_customer_id_from_po_detail(db, detail)
+            order_info = _extract_order_info_from_po_detail(db, detail)
+            customer_id = order_info["customer_id"]
+            channel_order_id = order_info["channel_order_id"]
+            channel_id = order_info["channel_id"]
             
             if not customer_id and po.purchase_title:
                 # Fallback: Extract from "Created for Order# XXXXX"
@@ -393,11 +466,30 @@ def backfill_po_customers(db: Session):
                         from app.services.sellercloud_client import sellercloud_client
                         order_detail = sellercloud_client.get_order(order_id)
                         customer_id = _get_customer_id_from_order_detail(db, order_detail)
+                        order_details_block = order_detail.get("OrderDetails", {})
+                        if not channel_order_id:
+                            channel_order_id = order_details_block.get("OrderSourceOrderId")
+                        if not channel_id:
+                            channel_name = _get_channel_name_from_order(order_detail)
+                            if channel_name:
+                                channel = _get_or_create_channel(db, channel_name)
+                                if channel:
+                                    channel_id = channel.id
                     except Exception as e:
                         print(f"Fallback order fetch failed for PO {po.sellercloud_po_id}: {e}")
             
-            if customer_id:
+            updated = False
+            if customer_id and not po.customer_id:
                 po.customer_id = customer_id
+                updated = True
+            if channel_order_id and not po.channel_order_id:
+                po.channel_order_id = channel_order_id
+                updated = True
+            if channel_id and not po.channel_id:
+                po.channel_id = channel_id
+                updated = True
+                
+            if updated:
                 db.commit()
                 count += 1
             
@@ -644,6 +736,39 @@ def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100)
                 po = models.PurchaseOrder(**mapped)
                 db.add(po)
                 db.flush()
+
+            # Fetch and set customer & channel info dynamically if missing
+            if not po.customer_id or not po.channel_order_id or not po.channel_id:
+                order_info = _extract_order_info_from_po_detail(db, detail)
+                
+                if order_info["customer_id"] and not po.customer_id:
+                    po.customer_id = order_info["customer_id"]
+                if order_info["channel_order_id"] and not po.channel_order_id:
+                    po.channel_order_id = order_info["channel_order_id"]
+                if order_info["channel_id"] and not po.channel_id:
+                    po.channel_id = order_info["channel_id"]
+                    
+                # Fallback to Title if info still missing
+                if (not po.customer_id or not po.channel_order_id) and po.purchase_title:
+                    import re
+                    match = re.search(r'Order#\s*(\d+)', po.purchase_title, re.IGNORECASE)
+                    if match:
+                        order_id = match.group(1)
+                        try:
+                            order_detail = sellercloud_client.get_order(order_id)
+                            if not po.customer_id:
+                                po.customer_id = _get_customer_id_from_order_detail(db, order_detail)
+                            order_details_block = order_detail.get("OrderDetails", {})
+                            if not po.channel_order_id:
+                                po.channel_order_id = order_details_block.get("OrderSourceOrderId")
+                            if not po.channel_id:
+                                channel_name = _get_channel_name_from_order(order_detail)
+                                if channel_name:
+                                    channel = _get_or_create_channel(db, channel_name)
+                                    if channel:
+                                        po.channel_id = channel.id
+                        except Exception as e:
+                            print(f"Fallback order fetch failed for PO {po.sellercloud_po_id}: {e}")
 
             line_items = detail.get("Items") or []
             if line_items:

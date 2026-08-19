@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timedelta
 import csv
 import io
@@ -14,7 +14,7 @@ from app.auth import get_current_user
 from app import models
 from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
 from app.services.email_service import send_tag_notification
-from app.services.sync_service import sync_purchase_orders, sync_containers
+from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
 from app.services.activity_service import log_activity
 
@@ -253,6 +253,92 @@ def get_status_counts(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/migrate-channels-schema")
+def migrate_schema():
+    """
+    Temporary endpoint to apply the channels schema migration to the live database.
+    """
+    from sqlalchemy import text
+    from app.database import engine
+    
+    results = []
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS channels (
+                        id UUID PRIMARY KEY,
+                        name VARCHAR(255) NOT NULL UNIQUE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """))
+                conn.commit()
+                results.append("Channels table created or already exists.")
+            except Exception as e:
+                conn.rollback()
+                results.append(f"channels table: {str(e)}")
+            
+            try:
+                conn.execute(text("ALTER TABLE purchase_orders ADD COLUMN channel_order_id VARCHAR(255) NULL;"))
+                conn.commit()
+                results.append("Added channel_order_id.")
+            except Exception as e:
+                conn.rollback()
+                results.append(f"channel_order_id: {str(e)}")
+
+            try:
+                conn.execute(text("ALTER TABLE purchase_orders ADD COLUMN channel_id UUID NULL;"))
+                conn.commit()
+                results.append("Added channel_id.")
+            except Exception as e:
+                conn.rollback()
+                results.append(f"channel_id: {str(e)}")
+
+            try:
+                conn.execute(text("""
+                    ALTER TABLE purchase_orders 
+                    ADD CONSTRAINT fk_purchase_orders_channel_id 
+                    FOREIGN KEY (channel_id) REFERENCES channels (id) ON DELETE SET NULL;
+                """))
+                conn.commit()
+                results.append("Added foreign key fk_purchase_orders_channel_id.")
+            except Exception as e:
+                conn.rollback()
+                results.append(f"foreign key: {str(e)}")
+                
+        return {"success": True, "details": results}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@router.post("/backfill-channels-customers")
+def trigger_backfill(background_tasks: BackgroundTasks):
+    """
+    Triggers a background task to backfill missing customer_id and channel_id
+    on all existing Purchase Orders.
+    """
+    def run_backfill():
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            backfill_po_customers(db)
+        finally:
+            db.close()
+            
+    background_tasks.add_task(run_backfill)
+    return {"message": "Background backfill task for Channels and Customers has been successfully triggered."}
+
+@router.get("/channel-order-ids", response_model=List[str])
+def list_channel_order_ids(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    List all distinct channel order IDs (e.g., 'Schuchman', 'NEWMARK / GUTTMAN - LAKEWOOD')
+    for dropdowns and filtering.
+    """
+    results = db.query(models.PurchaseOrder.channel_order_id).filter(
+        models.PurchaseOrder.channel_order_id != None
+    ).distinct().order_by(models.PurchaseOrder.channel_order_id).all()
+    return [r[0] for r in results if r[0]]
+
 @router.get("")
 def list_purchase_orders(
     page: Optional[int] = Query(None, ge=1, description="Page number. Leave empty for all."),
@@ -268,6 +354,8 @@ def list_purchase_orders(
     date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
+    channel_id: Optional[str] = Query(None, description="Filter by local Channel UUID"),
+    channel_order_id: Optional[str] = Query(None, description="Filter by explicit Channel Order ID (e.g. 'Schuchman')"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -293,6 +381,17 @@ def list_purchase_orders(
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
+    
+    if channel_id:
+        try:
+            import uuid
+            q = q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
+        except ValueError:
+            q = q.filter(models.PurchaseOrder.id == uuid.uuid4())  # Return empty if invalid UUID
+            
+    if channel_order_id:
+        q = q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{channel_order_id}%"))
+
     if status_code is not None:
         q = q.filter(models.PurchaseOrder.purchase_order_status_code == status_code)
         
@@ -365,7 +464,9 @@ def list_purchase_orders(
             models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}")),
             models.PurchaseOrder.company.has(models.Company.name.ilike(f"{search}%")),
             models.PurchaseOrder.customer.has(models.Customer.first_name.ilike(f"{search}%")),
-            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%"))
+            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{search}%")),
+            models.PurchaseOrder.channel.has(models.Channel.name.ilike(f"{search}%")),
+            models.PurchaseOrder.channel_order_id.ilike(f"{search}%")
         ]
         if search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
@@ -998,6 +1099,7 @@ def get_filtered_pos(
     filter_type: Optional[str] = Query(None, description="Filter type: new_without_invoice, invoice_delayed, delivery_overdue, remaining_items. If not provided, returns all 4 categories."),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     customer_id: Optional[str] = Query(None, description="Filter by customer UUID or SC ID"),
+    channel_id: Optional[str] = Query(None, description="Filter by channel UUID"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1060,6 +1162,13 @@ def get_filtered_pos(
                 )
             else:
                 base_q = base_q.filter(models.PurchaseOrder.customer_id == customer_id)
+                
+        if channel_id:
+            try:
+                import uuid
+                base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
+            except ValueError:
+                base_q = base_q.filter(models.PurchaseOrder.id == uuid.uuid4())
         
         # Helper function to create response object
         def create_category_response(data_list, total):
@@ -1868,6 +1977,44 @@ def trigger_single_po_sync(
         warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
         warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
         
+        # Extract channel and customer info dynamically
+        from app.services.sync_service import _extract_order_info_from_po_detail, _get_or_create_channel
+        order_info = _extract_order_info_from_po_detail(db, detail)
+        
+        customer_id = order_info["customer_id"]
+        channel_order_id = order_info["channel_order_id"]
+        channel_id = order_info["channel_id"]
+        
+        # Fallback for channel info if missing from RelatedItems
+        if (not customer_id or not channel_order_id) and mapped.get("purchase_title"):
+            try:
+                import re
+                match = re.search(r"Created for Order#\s*(\d+)", mapped["purchase_title"])
+                if match:
+                    order_id = match.group(1)
+                    order_detail = sellercloud_client.get_order_detail(order_id)
+                    if order_detail:
+                        if not customer_id:
+                            customer_email = order_detail.get("CustomerEmail")
+                            if customer_email:
+                                from app.services.sync_service import _get_or_create_customer
+                                customer = _get_or_create_customer(db, {"CustomerEmail": customer_email})
+                                if customer:
+                                    customer_id = customer.id
+                        
+                        order_details_block = order_detail.get("OrderDetails", {})
+                        if not channel_order_id:
+                            channel_order_id = order_details_block.get("OrderSourceOrderId")
+                        if not channel_id:
+                            from app.services.sync_service import _get_channel_name_from_order
+                            channel_name = _get_channel_name_from_order(order_detail)
+                            if channel_name and channel_name != "Unknown":
+                                channel = _get_or_create_channel(db, channel_name)
+                                if channel:
+                                    channel_id = channel.id
+            except Exception as e:
+                print(f"Fallback order fetch failed for PO {sellercloud_po_id}: {e}")
+
         # Upsert the PO
         existing_po = (
             db.query(models.PurchaseOrder)
@@ -1882,6 +2029,14 @@ def trigger_single_po_sync(
             existing_po.company_id = company.id if company else None
             existing_po.vendor_id = vendor.id if vendor else None
             existing_po.warehouse_id = warehouse.id if warehouse else None
+            
+            if customer_id:
+                existing_po.customer_id = customer_id
+            if channel_order_id:
+                existing_po.channel_order_id = channel_order_id
+            if channel_id:
+                existing_po.channel_id = channel_id
+                
             po_row = existing_po
         else:
             # Create new PO
@@ -1889,7 +2044,10 @@ def trigger_single_po_sync(
                 **mapped,
                 company_id=company.id if company else None,
                 vendor_id=vendor.id if vendor else None,
-                warehouse_id=warehouse.id if warehouse else None
+                warehouse_id=warehouse.id if warehouse else None,
+                customer_id=customer_id,
+                channel_order_id=channel_order_id,
+                channel_id=channel_id
             )
             db.add(po_row)
         
@@ -2052,6 +2210,7 @@ def export_single_po_csv(
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.channel),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
             joinedload(models.PurchaseOrder.comments)
@@ -2073,6 +2232,8 @@ def export_single_po_csv(
     writer.writerow(["PO ID", po.sellercloud_po_id])
     writer.writerow(["Title", po.purchase_title or ""])
     writer.writerow(["Vendor", po.vendor.name if po.vendor else ""])
+    writer.writerow(["Channel", po.channel.name if po.channel else ""])
+    writer.writerow(["Channel Order ID", po.channel_order_id or ""])
     writer.writerow(["Status Code", po.purchase_order_status_code or ""])
     writer.writerow(["Receiving Status", po.receiving_status_code or ""])
     writer.writerow(["Created On", po.created_on.isoformat() if po.created_on else ""])
@@ -2166,6 +2327,7 @@ def export_multiple_pos_csv(
             .joinedload(models.PurchaseOrderItem.container_links)
             .joinedload(models.PurchaseOrderItemContainer.container),
         joinedload(models.PurchaseOrder.vendor),
+        joinedload(models.PurchaseOrder.channel),
         joinedload(models.PurchaseOrder.comments),
         joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
         joinedload(models.PurchaseOrder.comments)
@@ -2239,6 +2401,8 @@ def export_multiple_pos_csv(
         "PO ID": (False, lambda po, item: po.sellercloud_po_id),
         "PO Title": (False, lambda po, item: po.purchase_title or ""),
         "Vendor": (False, lambda po, item: po.vendor.name if po.vendor else ""),
+        "Channel": (False, lambda po, item: po.channel.name if po.channel else ""),
+        "Channel Order ID": (False, lambda po, item: po.channel_order_id or ""),
         "Status Code": (False, lambda po, item: po.purchase_order_status_code or ""),
         "Receiving Status": (False, lambda po, item: po.receiving_status_code or ""),
         "Created On": (False, lambda po, item: po.created_on.isoformat() if po.created_on else ""),
@@ -2451,12 +2615,4 @@ def trigger_sync_customers(db: Session = Depends(get_db)):
         return {"success": False, "error": str(e)}
 
 
-@router.post("/sync/backfill-po-customers")
-def trigger_backfill_po_customers(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    Backfill customer_id for all existing Purchase Orders. 
-    Runs in the background.
-    """
-    from app.services.sync_service import backfill_po_customers
-    background_tasks.add_task(backfill_po_customers, db)
-    return {"success": True, "message": "Backfill started in the background. Check logs for progress."}
+

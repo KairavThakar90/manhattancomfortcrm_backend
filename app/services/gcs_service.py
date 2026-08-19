@@ -59,7 +59,6 @@ async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, c
                     img.save(output, format=img_format, quality=75, optimize=True)
                 else:
                     img.save(output, format=img_format, optimize=True)
-                   
                 compressed_bytes = output.getvalue()
                 dest_blob.upload_from_string(compressed_bytes, content_type=c_type)
                 return
@@ -67,7 +66,6 @@ async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, c
                 print("Pillow not installed. Skipping image compression.")
             except Exception as e:
                 print(f"Failed to compress image: {e}")
-               
         # Fallback to uploading original raw data
         dest_blob.upload_from_string(file_data, content_type=c_type)
  

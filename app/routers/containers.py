@@ -750,6 +750,67 @@ async def update_container(
     }
 
 
+@router.post("/preview-sc-payload")
+def preview_sc_payload(
+    container_data: ContainerCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    **DEBUG ONLY** - Resolves items and returns the exact JSON payload 
+    that would be sent to SellerCloud's `POST /api/ShippingContainers/{id}/Items` endpoint.
+    It does not call SellerCloud and does not modify the database.
+    """
+    resolved_items = []
+
+    for item_data in container_data.items:
+        item = None
+
+        if item_data.po_item_id:
+            item = (
+                db.query(models.PurchaseOrderItem)
+                .filter(models.PurchaseOrderItem.id == item_data.po_item_id)
+                .options(joinedload(models.PurchaseOrderItem.purchase_order))
+                .first()
+            )
+        elif item_data.sellercloud_item_id:
+            item = (
+                db.query(models.PurchaseOrderItem)
+                .filter(
+                    models.PurchaseOrderItem.sellercloud_item_id
+                    == item_data.sellercloud_item_id
+                )
+                .options(joinedload(models.PurchaseOrderItem.purchase_order))
+                .first()
+            )
+        elif item_data.sellercloud_po_id and item_data.sku:
+            item = (
+                db.query(models.PurchaseOrderItem)
+                .join(models.PurchaseOrder)
+                .filter(
+                    models.PurchaseOrder.sellercloud_po_id == item_data.sellercloud_po_id,
+                    models.PurchaseOrderItem.sku == item_data.sku,
+                )
+                .options(joinedload(models.PurchaseOrderItem.purchase_order))
+                .first()
+            )
+
+        if not item:
+            raise HTTPException(status_code=404, detail=f"PO item not found for data: {item_data}")
+            
+        resolved_items.append((item_data, item))
+
+    sc_items_payload = [
+        {
+            "PurchaseOrderID": item.purchase_order.sellercloud_po_id if item.purchase_order else item_data.sellercloud_po_id,
+            "PurchaseOrderItemID": item.sellercloud_item_id or item_data.sellercloud_item_id,
+            "Qty": item_data.qty_in_container,
+        }
+        for item_data, item in resolved_items
+    ]
+
+    return {"Items": sc_items_payload}
+
 # ---------------------------------------------------------------------------
 # POST /containers/{container_id}/items
 # ---------------------------------------------------------------------------
@@ -1576,10 +1637,13 @@ def export_containers_csv(
                 
                 po_order_number = ""
                 if po and po.purchase_title:
-                    import re
-                    match = re.search(r'#(\d+)', po.purchase_title)
-                    if match:
-                        po_order_number = match.group(1)
+                    if "cloned from po" in po.purchase_title.lower():
+                        po_order_number = "Stock"
+                    else:
+                        import re
+                        match = re.search(r'#(\d+)', po.purchase_title)
+                        if match:
+                            po_order_number = match.group(1)
 
                 row_dict = {
                     "container_name": ctr.container_name or "",

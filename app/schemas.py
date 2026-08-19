@@ -138,6 +138,20 @@ class CompanySummary(BaseModel):
     name: str
 
 
+# ---------- Channels ----------
+class ChannelSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    name: str
+
+class ChannelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    name: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 # ---------- Vendor ----------
 class VendorOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -163,7 +177,6 @@ class VendorSummary(BaseModel):
     sellercloud_vendor_id: Optional[int] = None
     name: str
     container_lead_time_days: Optional[int] = None
-
 
 
 class VendorUpdate(BaseModel):
@@ -576,6 +589,9 @@ class PurchaseOrderOut(BaseModel):
     sellercloud_po_id: Optional[int] = None
     purchase_title: Optional[str] = None
     order_number: Optional[str] = None  # Extracted from purchase_title (number after #)
+    channel_order_id: Optional[str] = None
+    channel_id: Optional[uuid.UUID] = None
+    channel: Optional[ChannelSummary] = None
     warehouse_id: Optional[uuid.UUID] = None
     warehouse: Optional[WarehouseOut] = None
     purchase_order_status_code: Optional[int] = None
@@ -657,9 +673,12 @@ class PurchaseOrderOut(BaseModel):
         
         # Extract order number from purchase_title (e.g., "Created for Order# 6962293" -> "6962293")
         if instance.purchase_title:
-            match = re.search(r'#\s*(\d+)', instance.purchase_title)
-            if match:
-                instance.order_number = match.group(1)
+            if "cloned from po" in instance.purchase_title.lower():
+                instance.order_number = "Stock"
+            else:
+                match = re.search(r'#\s*(\d+)', instance.purchase_title)
+                if match:
+                    instance.order_number = match.group(1)
         
         # Calculate totals from items
         if instance.items:
@@ -827,6 +846,7 @@ class ValidateContainerBulkRequest(BaseModel):
 
 class UserActivityLogCreate(BaseModel):
     action: str = Field(..., description="Action name, e.g., VIEW_PO, CLICK_BUTTON")
+    category: Optional[str] = None
     entity_type: Optional[str] = None
     entity_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
@@ -836,6 +856,7 @@ class UserActivityLogOut(BaseModel):
     id: uuid.UUID
     user_id: Optional[uuid.UUID] = None
     action: str
+    category: Optional[str] = None
     entity_type: Optional[str] = None
     entity_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None

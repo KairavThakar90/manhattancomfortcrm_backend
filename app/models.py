@@ -137,12 +137,25 @@ class Warehouse(Base):
     purchase_orders = relationship("PurchaseOrder", back_populates="warehouse")
     containers = relationship("ShippingContainer", back_populates="warehouse")
 
+class Channel(Base):
+    __tablename__ = "channels"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), unique=True, index=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    purchase_orders = relationship("PurchaseOrder", back_populates="channel")
+
+
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sellercloud_po_id = Column(Integer, unique=True, index=True)
     purchase_title = Column(String(255))
+    channel_order_id = Column(String(255), nullable=True)
+    channel_id = Column(UUID(as_uuid=True), ForeignKey("channels.id", ondelete="SET NULL"), nullable=True)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"))
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"))
     purchase_order_status_code = Column(Integer)
@@ -176,6 +189,7 @@ class PurchaseOrder(Base):
     vendor = relationship("Vendor", back_populates="purchase_orders")
     warehouse = relationship("Warehouse", back_populates="purchase_orders")
     customer = relationship("Customer", backref="purchase_orders")
+    channel = relationship("Channel", back_populates="purchase_orders")
     items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
     comments = relationship("PurchaseOrderComment", back_populates="purchase_order", cascade="all, delete-orphan")
 
@@ -353,6 +367,7 @@ class UserActivityLog(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     action = Column(String(50), nullable=False)  # e.g., LOGIN, SYNC_PO, CREATE_USER
+    category = Column(String(100), nullable=True)  # e.g., SHIPPING, FINANCE, PO_MANAGEMENT
     entity_type = Column(String(50), nullable=True)  # e.g., PURCHASE_ORDER, CONTAINER
     entity_id = Column(String(255), nullable=True)  # ID of the affected entity
     details = Column(JSONB, nullable=True)  # Extra context
