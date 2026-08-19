@@ -2494,6 +2494,9 @@ def export_multiple_pos_csv(
         "Comments": (False, lambda po, item: " | ".join(
             [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
         ) if getattr(po, "comments", None) else ""),
+        "Item Comments": (True, lambda po, item: " | ".join(
+            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in item.comments]
+        ) if item and getattr(item, "comments", None) else ""),
     }
 
     if request_data.columns:
