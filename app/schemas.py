@@ -282,6 +282,7 @@ class ContainerOut(BaseModel):
     total_qty_in_container: Optional[int] = None
     total_qty_received: Optional[int] = None
     unique_pos: Optional[int] = None
+    po_numbers: List[int] = []
     attachments: List[ContainerAttachmentOut] = []
 
     model_config = ConfigDict(from_attributes=True)

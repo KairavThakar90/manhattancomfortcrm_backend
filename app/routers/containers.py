@@ -88,7 +88,8 @@ def list_containers(
     """
     query = db.query(models.ShippingContainer).options(
         joinedload(models.ShippingContainer.warehouse),
-        joinedload(models.ShippingContainer.attachments)
+        joinedload(models.ShippingContainer.attachments),
+        joinedload(models.ShippingContainer.item_links).joinedload(models.PurchaseOrderItemContainer.item).joinedload(models.PurchaseOrderItem.purchase_order)
     )
 
     # Received / not-received filter
@@ -178,9 +179,13 @@ def list_containers(
         total_items = len(links)
         total_qty = sum(lnk.qty_in_container or 0 for lnk in links)
         total_received = total_qty if ctr.received_date else 0
-        unique_po_ids = set(
-            lnk.item.purchase_order_id for lnk in links if lnk.item
-        )
+        unique_po_ids = set()
+        po_numbers_set = set()
+        for lnk in links:
+            if lnk.item and lnk.item.purchase_order_id:
+                unique_po_ids.add(lnk.item.purchase_order_id)
+                if getattr(lnk.item, "purchase_order", None) and lnk.item.purchase_order.sellercloud_po_id:
+                    po_numbers_set.add(lnk.item.purchase_order.sellercloud_po_id)
 
         results.append(
             ContainerOut(
@@ -209,7 +214,8 @@ def list_containers(
                 total_qty_in_container=total_qty,
                 total_qty_received=total_received,
                 unique_pos=len(unique_po_ids),
-                attachments=ctr.attachments,
+                po_numbers=list(po_numbers_set),
+                attachments=[ContainerAttachmentOut.model_validate(a) for a in ctr.attachments]
             )
         )
 
