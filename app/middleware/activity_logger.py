@@ -13,9 +13,9 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
         # Continue with the request handling
         response = await call_next(request)
         
-        # We only care about logging /api/v1 routes
+        # We only care about logging state-changing /api/v1 routes to reduce DB load
         path = request.url.path
-        if path.startswith("/api/v1/") and request.method != "OPTIONS":
+        if path.startswith("/api/v1/") and request.method not in ["OPTIONS", "GET"]:
             # Offload the logging to a thread so it doesn't block
             # the current event loop or delay the response too much.
             method = request.method
