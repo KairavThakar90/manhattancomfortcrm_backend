@@ -2214,6 +2214,7 @@ def export_single_po_csv(
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.channel),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
             joinedload(models.PurchaseOrder.comments)
@@ -2235,6 +2236,8 @@ def export_single_po_csv(
     writer.writerow(["PO ID", po.sellercloud_po_id])
     writer.writerow(["Title", po.purchase_title or ""])
     writer.writerow(["Vendor", po.vendor.name if po.vendor else ""])
+    writer.writerow(["Channel", po.channel.name if po.channel else ""])
+    writer.writerow(["Channel Order ID", po.channel_order_id or ""])
     writer.writerow(["Status Code", po.purchase_order_status_code or ""])
     writer.writerow(["Receiving Status", po.receiving_status_code or ""])
     writer.writerow(["Created On", po.created_on.isoformat() if po.created_on else ""])
@@ -2322,6 +2325,7 @@ def export_multiple_pos_csv(
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.channel),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
             joinedload(models.PurchaseOrder.comments)
@@ -2381,6 +2385,8 @@ def export_multiple_pos_csv(
         "PO ID": lambda p, i, c_name, c_eta: p.sellercloud_po_id,
         "PO Title": lambda p, i, c_name, c_eta: p.purchase_title or "",
         "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
+        "Channel": lambda p, i, c_name, c_eta: p.channel.name if p.channel else "",
+        "Channel Order ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
         "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
         "Receiving Status": lambda p, i, c_name, c_eta: p.receiving_status_code or "",
         "Created On": lambda p, i, c_name, c_eta: p.created_on.isoformat() if p.created_on else "",
