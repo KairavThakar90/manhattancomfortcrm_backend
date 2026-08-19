@@ -345,6 +345,7 @@ def list_purchase_orders(
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
     channel_id: Optional[str] = Query(None, description="Filter by local Channel UUID"),
     channel_order_id: Optional[str] = Query(None, description="Filter by explicit Channel Order ID (e.g. 'Schuchman')"),
+    sellercloud_warehouse_id: Optional[str] = Query(None, description="Filter by Warehouse UUID or integer ID"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -444,6 +445,17 @@ def list_purchase_orders(
             )
         else:
             q = q.filter(models.PurchaseOrder.customer_id == customer_id)
+            
+    if sellercloud_warehouse_id:
+        try:
+            import uuid
+            w_uuid = uuid.UUID(sellercloud_warehouse_id)
+            q = q.filter(models.PurchaseOrder.warehouse_id == w_uuid)
+        except ValueError:
+            if sellercloud_warehouse_id.isdigit():
+                q = q.join(models.Warehouse, models.PurchaseOrder.warehouse_id == models.Warehouse.id).filter(
+                    models.Warehouse.sellercloud_warehouse_id == int(sellercloud_warehouse_id)
+                )
         
     if search:
         import re
@@ -2338,6 +2350,55 @@ def export_multiple_pos_csv(
                 .joinedload(models.PurchaseOrderComment.user)
         )
     )
+
+    if request_data.channel_id:
+        try:
+            import uuid
+            base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(request_data.channel_id))
+        except ValueError:
+            pass
+            
+    if request_data.vendor_id:
+        base_q = base_q.filter(models.PurchaseOrder.vendor_id == request_data.vendor_id)
+        
+    if request_data.customer_id:
+        if request_data.customer_id == "00000000-0000-0000-0000-000000000000" or request_data.customer_id == "0":
+            base_q = base_q.filter(models.PurchaseOrder.customer_id.is_(None))
+        elif request_data.customer_id.isdigit():
+            base_q = base_q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+                models.Customer.sellercloud_customer_id == int(request_data.customer_id)
+            )
+        else:
+            base_q = base_q.filter(models.PurchaseOrder.customer_id == request_data.customer_id)
+            
+    if request_data.search:
+        import re
+        from sqlalchemy import or_, cast, String
+        escaped_search = re.escape(request_data.search)
+        search_conditions = [
+            models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
+            models.PurchaseOrder.vendor.has(models.Vendor.name.op('~*')(rf"\y{escaped_search}")),
+            models.PurchaseOrder.company.has(models.Company.name.ilike(f"{request_data.search}%")),
+            models.PurchaseOrder.customer.has(models.Customer.first_name.ilike(f"{request_data.search}%")),
+            models.PurchaseOrder.customer.has(models.Customer.last_name.ilike(f"{request_data.search}%")),
+            models.PurchaseOrder.channel.has(models.Channel.name.ilike(f"{request_data.search}%")),
+            models.PurchaseOrder.channel_order_id.ilike(f"{request_data.search}%")
+        ]
+        if request_data.search.isdigit():
+            search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
+        
+        base_q = base_q.filter(or_(*search_conditions))
+
+    if request_data.date_from:
+        base_q = base_q.filter(models.PurchaseOrder.date_ordered >= request_data.date_from)
+    if request_data.date_to:
+        date_to = request_data.date_to
+        # If date_to has no time component (midnight), extend it to the end of the day
+        if date_to.time() == datetime.min.time():
+            from datetime import time
+            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
+        base_q = base_q.filter(models.PurchaseOrder.date_ordered <= date_to)
+
 
     if request_data.po_ids:
         pos = base_q.filter(models.PurchaseOrder.sellercloud_po_id.in_(request_data.po_ids)).all()

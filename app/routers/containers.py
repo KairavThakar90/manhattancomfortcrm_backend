@@ -13,7 +13,7 @@ from app import models, schemas
 from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
-    ContainerUpdate, ContainerAddItems, UserActivityLogOut, PaginatedResponse
+    ContainerUpdate, ContainerAddItems, ContainerActivityCreate, UserActivityLogOut, PaginatedResponse
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
@@ -955,6 +955,34 @@ def add_items_to_container(
         "message": f"Successfully added {len(resolved_items)} items to container",
         "items_added": linked_items_summary
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/activities
+# ---------------------------------------------------------------------------
+@router.post("/{container_id}/activities")
+def add_container_activity(
+    container_id: str,
+    activity_data: ContainerActivityCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Manually add an activity log/comment to a container.
+    """
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    log_activity(
+        db,
+        action="ADD_CONTAINER_COMMENT",
+        user_id=current_user.id,
+        entity_type="CONTAINER",
+        entity_id=str(container.id),
+        details={"message": activity_data.message}
+    )
+    return {"success": True, "message": "Activity added successfully"}
 
 
 # ---------------------------------------------------------------------------
