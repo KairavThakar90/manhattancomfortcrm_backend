@@ -2479,7 +2479,10 @@ def export_multiple_pos_csv(
         "Notes": lambda p, i, c_name, c_eta: p.notes or "",
         "Comments": lambda p, i, c_name, c_eta: " | ".join(
             [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in p.comments]
-        ) if getattr(p, "comments", None) else ""
+        ) if getattr(p, "comments", None) else "",
+        "Item Comments": lambda p, i, c_name, c_eta: " | ".join(
+            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in i.comments]
+        ) if i and getattr(i, "comments", None) else ""
     }
 
     all_cols = list(column_map.keys())

@@ -272,11 +272,46 @@ async def send_container_emptied_notification(email_to: str, container_name: str
         return
 
     subject = f"Container Emptied: {container_name}"
-    door_html = f" at Door <strong>{door_name}</strong>" if door_name else ""
+    # Try to parse and reformat date
+    display_date = date_emptied
+    try:
+        from datetime import datetime
+        dt = datetime.strptime(date_emptied, "%Y-%m-%d")
+        display_date = dt.strftime("%B %d, %Y")
+    except Exception:
+        pass
+        
+    door_val = door_name if door_name else "N/A"
+    
     html = f"""
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
-        <h2 style="color: #333;">Container Emptied Notification</h2>
-        <p>Container <strong>{container_name}</strong> was emptied on <strong>{date_emptied}</strong>{door_html}.</p>
+    <div style="font-family: Arial, sans-serif; max-width: 600px; color: #333;">
+        <p>Hello,</p>
+        <p>This is to notify you that the following container has been successfully emptied:</p>
+        
+        <table style="width: 100%; border-collapse: collapse; margin: 20px 0; border: 1px solid #ddd;">
+            <tr style="background-color: #f2f2f2;">
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold; width: 40%;">Details</td>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold; width: 60%;">Information</td>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Container Number</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">{container_name}</td>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Status</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">Emptied</td>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Date</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">{display_date}</td>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Door</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">{door_val}</td>
+            </tr>
+        </table>
+        
+        <p>Best regards,</p>
         {EMAIL_SIGNATURE_HTML}
     </div>
     """
