@@ -66,6 +66,11 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
             changes_str = ", ".join(change_strs)
             return f"{name} updated Container {entity_id}: {changes_str}."
         return f"{name} updated Shipping Container {entity_id}."
+    elif action == "ADD_CONTAINER_COMMENT":
+        msg = details.get("message", "")
+        if msg:
+            return f"{name} commented on Container {entity_id}: {msg}"
+        return f"{name} added a comment to Container {entity_id}."
     elif action == "ADD_CONTAINER_ATTACHMENTS":
         count = details.get("files_uploaded", "attachments")
         return f"{name} uploaded {count} attachments to Shipping Container {entity_id}."

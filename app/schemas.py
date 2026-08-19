@@ -412,6 +412,9 @@ class ContainerUpdate(BaseModel):
 class ContainerAddItems(BaseModel):
     items: List[ContainerItemCreate] = Field(min_length=1, description="List of items to add to this container")
 
+class ContainerActivityCreate(BaseModel):
+    message: str
+
 
 # ---------- PO items for container creation ----------
 class POItemForContainerOut(BaseModel):
@@ -835,6 +838,12 @@ class POExportRequest(BaseModel):
     po_ids: Optional[List[Union[int, uuid.UUID]]] = Field(default=None, description="SellerCloud PO IDs (int) or internal PO UUIDs. Omit to export all purchase orders.")
     filter_status: Optional[str] = Field(default=None, description="invoice_delayed, delivery_delayed, or lefts_items")
     columns: Optional[List[str]] = Field(default=None, description="Subset/order of column names to include. Omit to include all columns.")
+    vendor_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    channel_id: Optional[str] = None
+    search: Optional[str] = None
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
 
 class ValidateContainerRowRequest(BaseModel):
     po_id: str

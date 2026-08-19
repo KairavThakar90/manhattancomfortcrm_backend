@@ -13,7 +13,7 @@ from app import models, schemas
 from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
-    ContainerUpdate, ContainerAddItems, UserActivityLogOut, PaginatedResponse
+    ContainerUpdate, ContainerAddItems, ContainerActivityCreate, UserActivityLogOut, PaginatedResponse
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
@@ -958,6 +958,34 @@ def add_items_to_container(
 
 
 # ---------------------------------------------------------------------------
+# POST /containers/{container_id}/activities
+# ---------------------------------------------------------------------------
+@router.post("/{container_id}/activities")
+def add_container_activity(
+    container_id: str,
+    activity_data: ContainerActivityCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Manually add an activity log/comment to a container.
+    """
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    log_activity(
+        db,
+        action="ADD_CONTAINER_COMMENT",
+        user_id=current_user.id,
+        entity_type="CONTAINER",
+        entity_id=str(container.id),
+        details={"message": activity_data.message}
+    )
+    return {"success": True, "message": "Activity added successfully"}
+
+
+# ---------------------------------------------------------------------------
 # GET /containers/{container_id}/activities
 # ---------------------------------------------------------------------------
 @router.get("/{container_id}/activities", response_model=PaginatedResponse)
@@ -996,41 +1024,6 @@ def get_container_activities(
         page_size=page_size,
         results=results
     )
-
-
-# ---------------------------------------------------------------------------
-# POST /containers/{container_id}/activities
-# ---------------------------------------------------------------------------
-@router.post("/{container_id}/activities", response_model=dict)
-def create_container_activity(
-    container_id: str,
-    activity: schemas.UserActivityLogCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    """
-    Log a custom user activity scoped to a specific container (e.g. viewing or
-    interacting with the container detail page from the frontend).
-    """
-    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
-    if not container:
-        raise HTTPException(status_code=404, detail="Container not found")
-
-    # Ignore read-only navigation actions to reduce database load
-    if activity.action.startswith("VIEW_") or activity.action.startswith("GET_"):
-        return {"status": "success", "message": "Ignored read-only activity"}
-
-    from app.services.activity_service import log_activity
-    log_activity(
-        db=db,
-        action=activity.action,
-        user_id=current_user.id,
-        category=activity.category,
-        entity_type=activity.entity_type or "CONTAINER",
-        entity_id=str(container.id),
-        details=activity.details
-    )
-    return {"status": "success", "message": "Activity logged"}
 
 
 # ---------------------------------------------------------------------------
