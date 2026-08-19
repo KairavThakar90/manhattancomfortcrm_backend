@@ -1828,19 +1828,22 @@ def update_po_status(
             
     changed = False
     old_status = po.status
+    changes = []
     
-    if status_data.status is not None:
+    if status_data.status is not None and po.status != status_data.status:
+        changes.append({"field": "status", "old": po.status, "new": status_data.status})
         po.status = status_data.status
         changed = True
         
-    if status_data.delay_reason is not None:
+    if status_data.delay_reason is not None and po.delay_reason != status_data.delay_reason:
+        changes.append({"field": "delay_reason", "old": po.delay_reason, "new": status_data.delay_reason})
         po.delay_reason = status_data.delay_reason
         changed = True
         
     if changed:
         db.commit()
         db.refresh(po)
-        log_activity(db, action="UPDATE_PO_STATUS", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"status": po.status})
+        log_activity(db, action="UPDATE_PO_STATUS", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes})
         
         # Send email notification if vendor made the change
         if current_user.role == "vendor":
@@ -1892,11 +1895,14 @@ def update_po_lead_time(
     if not po:
         raise HTTPException(status_code=404, detail=f"Purchase order '{po_id}' not found")
     
-    po.container_lead_time_days = container_lead_time_days
-    db.commit()
-    db.refresh(po)
-    
-    log_activity(db, action="UPDATE_PO_LEAD_TIME", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"lead_time": container_lead_time_days})
+    old_lead_time = po.container_lead_time_days
+    if old_lead_time != container_lead_time_days:
+        po.container_lead_time_days = container_lead_time_days
+        db.commit()
+        db.refresh(po)
+        
+        changes = [{"field": "container_lead_time_days", "old": old_lead_time, "new": container_lead_time_days}]
+        log_activity(db, action="UPDATE_PO_LEAD_TIME", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes})
     
     return {
         "message": "Lead time updated successfully",
