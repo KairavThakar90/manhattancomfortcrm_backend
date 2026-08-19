@@ -14,6 +14,18 @@ def log_activity(
     """
     Utility function to quickly log user or system activity.
     """
+    if not category:
+        if action in ["LOGIN", "LOGIN_GOOGLE", "LOGIN_BYPASS_2FA", "REGISTER"]:
+            category = "AUTH"
+        elif "COMMENT" in action:
+            category = "COMMUNICATION"
+        elif entity_type == "CONTAINER" or "CONTAINER" in action:
+            category = "CONTAINER"
+        elif entity_type == "PURCHASE_ORDER" or "PO_" in action:
+            category = "PURCHASE_ORDER"
+        else:
+            category = "SYSTEM"
+            
     try:
         log_entry = models.UserActivityLog(
             user_id=user_id,

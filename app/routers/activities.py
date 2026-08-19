@@ -89,6 +89,10 @@ def create_activity(
     """
     Log a custom user activity from the frontend (e.g. clicking a button, viewing a page).
     """
+    # Ignore read-only navigation actions to reduce database load
+    if activity.action.startswith("VIEW_") or activity.action.startswith("GET_"):
+        return {"status": "success", "message": "Ignored read-only activity"}
+
     from app.services.activity_service import log_activity
     log_activity(
         db=db,
