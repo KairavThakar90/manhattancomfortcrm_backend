@@ -17,12 +17,12 @@ def log_activity(
     if not category:
         if action in ["LOGIN", "LOGIN_GOOGLE", "LOGIN_BYPASS_2FA", "REGISTER"]:
             category = "AUTH"
-        elif "COMMENT" in action:
-            category = "COMMUNICATION"
         elif entity_type == "CONTAINER" or "CONTAINER" in action:
             category = "CONTAINER"
         elif entity_type == "PURCHASE_ORDER" or "PO_" in action:
             category = "PURCHASE_ORDER"
+        elif "COMMENT" in action:
+            category = "COMMUNICATION"
         else:
             category = "SYSTEM"
             
@@ -54,6 +54,17 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
     elif action == "REGISTER":
         return f"{name} registered a new account."
     elif action == "UPDATE_CONTAINER":
+        changes = details.get("changes", [])
+        if changes:
+            change_strs = []
+            for c in changes:
+                field_name = c["field"].replace("_", " ").title()
+                old_val = c.get("old", "none") or "none"
+                new_val = c.get("new", "none") or "none"
+                change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
+            
+            changes_str = ", ".join(change_strs)
+            return f"{name} updated Container {entity_id}: {changes_str}."
         return f"{name} updated Shipping Container {entity_id}."
     elif action == "ADD_CONTAINER_ATTACHMENTS":
         count = details.get("files_uploaded", "attachments")
@@ -68,13 +79,29 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
         return f"{name} added a comment to a Purchase Order Item (PO {entity_id})."
     elif action == "UPDATE_PO_ITEM_COMMENT":
         return f"{name} updated a comment on a Purchase Order Item (PO {entity_id})."
-    elif action == "UPDATE_PO_STATUS":
-        status = details.get("status", "unknown")
-        return f"{name} updated Purchase Order {entity_id} status to {status}."
-    elif action == "UPDATE_PO_LEAD_TIME":
-        return f"{name} updated lead time on Purchase Order {entity_id}."
+    elif action in ["UPDATE_PO_STATUS", "UPDATE_PO_LEAD_TIME"]:
+        changes = details.get("changes", [])
+        if changes:
+            change_strs = []
+            for c in changes:
+                field_name = c["field"].replace("_", " ").title()
+                old_val = c.get("old", "none") or "none"
+                new_val = c.get("new", "none") or "none"
+                change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
+            
+            changes_str = ", ".join(change_strs)
+            return f"{name} updated Purchase Order {entity_id}: {changes_str}."
+        return f"{name} updated Purchase Order {entity_id}."
     elif action == "SYNC_PO":
         return f"{name} manually synced Purchase Order {entity_id} from SellerCloud."
+    elif action == "UPDATE_PO_ITEM_QUANTITY":
+        old_qty = details.get("old_qty", "unknown")
+        new_qty = details.get("new_qty", "unknown")
+        return f"{name} changed Product Quantity for Item {entity_id} from {old_qty} to {new_qty}."
+    elif action == "ADD_ITEM_TO_CONTAINER":
+        sku = details.get("sku", "unknown item")
+        qty = details.get("qty_added", 0)
+        return f"{name} added {qty} units of {sku} to Container {entity_id}."
     elif action == "CONTAINER_ITEM_UPDATE":
         msg = details.get("message")
         if msg:

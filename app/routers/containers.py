@@ -648,13 +648,26 @@ async def update_container(
             # We can optionally fail here or continue saving locally
             # raise HTTPException(status_code=500, detail=f"SellerCloud sync failed: {exc}")
 
-    # Update local DB
-    if update_data.container_name is not None:
+    # Update local DB and track exact changes
+    changes = []
+    
+    if update_data.container_name is not None and update_data.container_name != container.container_name:
+        changes.append({"field": "container_name", "old": container.container_name, "new": update_data.container_name})
         container.container_name = update_data.container_name
+        
     if update_data.estimated_arrival_date is not None:
-        container.estimated_arrival_date = update_data.estimated_arrival_date
+        old_val = container.estimated_arrival_date.isoformat() if container.estimated_arrival_date else None
+        new_val = update_data.estimated_arrival_date.isoformat() if update_data.estimated_arrival_date else None
+        if old_val != new_val:
+            changes.append({"field": "estimated_arrival_date", "old": old_val, "new": new_val})
+            container.estimated_arrival_date = update_data.estimated_arrival_date
+            
     if update_data.received_date is not None:
-        container.received_date = update_data.received_date
+        old_val = container.received_date.isoformat() if container.received_date else None
+        new_val = update_data.received_date.isoformat() if update_data.received_date else None
+        if old_val != new_val:
+            changes.append({"field": "received_date", "old": old_val, "new": new_val})
+            container.received_date = update_data.received_date
 
     # Update lifecycle fields dynamically if they are passed in the request
     update_dict = update_data.model_dump(exclude_unset=True)
@@ -666,7 +679,23 @@ async def update_container(
     ]
     for field in lifecycle_fields:
         if field in update_dict:
-            setattr(container, field, update_dict[field])
+            new_val = update_dict[field]
+            old_val = getattr(container, field)
+            
+            if isinstance(old_val, datetime):
+                old_val_str = old_val.isoformat()
+            else:
+                old_val_str = old_val
+                
+            if isinstance(new_val, datetime):
+                new_val_str = new_val.isoformat()
+            else:
+                new_val_str = new_val
+                
+            if old_val_str != new_val_str:
+                changes.append({"field": field, "old": old_val_str, "new": new_val_str})
+                
+            setattr(container, field, new_val)
 
     # Process files
     uploaded_attachments = []
@@ -726,7 +755,11 @@ async def update_container(
         container.last_notified_trucker_email = container.trucker_email
         db.commit()
 
-    log_activity(db, action="UPDATE_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details=update_data.model_dump(mode='json', exclude_unset=True))
+    details_payload = update_data.model_dump(mode='json', exclude_unset=True)
+    if changes:
+        details_payload["changes"] = changes
+        
+    log_activity(db, action="UPDATE_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details=details_payload)
 
     return {
         "success": True,
