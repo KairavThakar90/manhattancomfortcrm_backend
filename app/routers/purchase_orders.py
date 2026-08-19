@@ -2356,7 +2356,11 @@ def export_multiple_pos_csv(
             import uuid
             base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(request_data.channel_id))
         except ValueError:
-            pass
+            # Fallback: if it's not a UUID, try filtering by channel_order_id
+            base_q = base_q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{request_data.channel_id}%"))
+            
+    if getattr(request_data, 'channel_order_id', None):
+        base_q = base_q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{request_data.channel_order_id}%"))
             
     if request_data.vendor_id:
         base_q = base_q.filter(models.PurchaseOrder.vendor_id == request_data.vendor_id)

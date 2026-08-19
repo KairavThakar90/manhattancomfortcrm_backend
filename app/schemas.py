@@ -838,6 +838,7 @@ class POExportRequest(BaseModel):
     vendor_id: Optional[str] = None
     customer_id: Optional[str] = None
     channel_id: Optional[str] = None
+    channel_order_id: Optional[str] = None
     search: Optional[str] = None
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
