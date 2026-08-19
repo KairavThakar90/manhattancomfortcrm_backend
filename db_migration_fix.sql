@@ -78,7 +78,37 @@ CREATE TABLE IF NOT EXISTS user_activity_logs (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE user_activity_logs ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+
 CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON user_activity_logs(user_id);
+
+-- ---------------------------------------------------------------------
+-- channels table + purchase_orders channel linkage
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS channels (
+    id UUID PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS channel_order_id VARCHAR(255) NULL;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS channel_id UUID NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.table_constraints
+        WHERE constraint_type = 'FOREIGN KEY'
+          AND table_name = 'purchase_orders'
+          AND constraint_name = 'fk_purchase_orders_channel_id'
+    ) THEN
+        ALTER TABLE purchase_orders
+            ADD CONSTRAINT fk_purchase_orders_channel_id
+            FOREIGN KEY (channel_id) REFERENCES channels (id) ON DELETE SET NULL;
+    END IF;
+END $$;
 
 -- ---------------------------------------------------------------------
 -- sync logs table
