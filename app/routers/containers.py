@@ -997,6 +997,42 @@ def get_container_activities(
         results=results
     )
 
+
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/activities
+# ---------------------------------------------------------------------------
+@router.post("/{container_id}/activities", response_model=dict)
+def create_container_activity(
+    container_id: str,
+    activity: schemas.UserActivityLogCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Log a custom user activity scoped to a specific container (e.g. viewing or
+    interacting with the container detail page from the frontend).
+    """
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    # Ignore read-only navigation actions to reduce database load
+    if activity.action.startswith("VIEW_") or activity.action.startswith("GET_"):
+        return {"status": "success", "message": "Ignored read-only activity"}
+
+    from app.services.activity_service import log_activity
+    log_activity(
+        db=db,
+        action=activity.action,
+        user_id=current_user.id,
+        category=activity.category,
+        entity_type=activity.entity_type or "CONTAINER",
+        entity_id=str(container.id),
+        details=activity.details
+    )
+    return {"status": "success", "message": "Activity logged"}
+
+
 # ---------------------------------------------------------------------------
 # GET /containers/{container_id}/details
 # ---------------------------------------------------------------------------
