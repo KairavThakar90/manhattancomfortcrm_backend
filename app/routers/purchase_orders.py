@@ -756,7 +756,7 @@ async def add_po_comment(
         attachments=email_attachments
     )
     
-    log_activity(db, action="ADD_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"comment_id": str(new_comment.id)})
+    log_activity(db, action="ADD_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"comment_id": str(new_comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
     return new_comment
 
 @router.put("/comments/{comment_id}", response_model=POCommentOut)
@@ -796,7 +796,7 @@ async def update_po_comment(
         comment_text=comment.comment
     )
     
-    log_activity(db, action="UPDATE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": str(comment.id)})
+    log_activity(db, action="UPDATE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": str(comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
     return comment
 
 @router.get("/items/{item_id}/comments", response_model=list[POItemCommentOut])
@@ -975,7 +975,7 @@ async def add_po_item_comment(
         attachments=email_attachments
     )
     
-    log_activity(db, action="ADD_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id), details={"comment_id": str(new_comment.id)})
+    log_activity(db, action="ADD_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id), details={"comment_id": str(new_comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
     return new_comment
 
 @router.put("/items/comments/{comment_id}", response_model=POItemCommentOut)
@@ -1016,7 +1016,7 @@ async def update_po_item_comment(
         comment_text=comment.comment
     )
     
-    log_activity(db, action="UPDATE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": str(comment.id)})
+    log_activity(db, action="UPDATE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": str(comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
     return comment
 
 

@@ -41,6 +41,18 @@ def log_activity(
         db.rollback()
         print(f"Failed to log activity '{action}': {e}")
 
+def _clean_val_for_display(val, field_name=""):
+    if val is None or val == "":
+        return "none"
+    val_str = str(val).strip()
+    # Strip time from date/datetime strings (e.g. 2026-08-22T00:00:00+00:00 or 2026-08-22 00:00:00)
+    if "date" in field_name.lower() or ("T" in val_str and len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-'):
+        if "T" in val_str:
+            val_str = val_str.split("T")[0]
+        elif " " in val_str and len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-':
+            val_str = val_str.split(" ")[0]
+    return val_str
+
 def generate_human_readable_message(action: str, entity_type: str, entity_id: str, details: dict, user_name: str) -> str:
     name = user_name or "System"
     details = details or {}
@@ -58,19 +70,23 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
         if changes:
             change_strs = []
             for c in changes:
-                field_name = c["field"].replace("_", " ").title()
+                field_name = c.get("field", "")
+                old_val = _clean_val_for_display(c.get("old"), field_name)
+                new_val = _clean_val_for_display(c.get("new"), field_name)
                 
-                old_val = c.get("old")
-                if old_val is None or old_val == "": old_val = "none"
-                
-                new_val = c.get("new")
-                if new_val is None or new_val == "": new_val = "none"
-                
-                change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
+                # If they normalize to the same value, skip displaying it
+                if old_val == new_val:
+                    continue
+
+                display_field = field_name.replace("_", " ").title()
+                change_strs.append(f"{display_field} changed from {old_val} to {new_val}")
             
-            changes_str = ", ".join(change_strs)
-            return f"{name} updated the container: {changes_str}."
-        return f"{name} updated the container."
+            if change_strs:
+                changes_str = ", ".join(change_strs)
+                c_name = details.get("container_name") or entity_id
+                return f"{name} updated container {c_name}: {changes_str}."
+        c_name = details.get("container_name") or entity_id
+        return f"{name} updated container {c_name}."
     elif action == "ADD_CONTAINER_COMMENT":
         msg = details.get("message", "")
         if msg:
@@ -78,34 +94,41 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
         return f"{name} added a comment."
     elif action == "ADD_CONTAINER_ATTACHMENTS":
         count = details.get("files_uploaded", "attachments")
-        return f"{name} uploaded {count} attachments to Shipping Container {entity_id}."
+        c_name = details.get("container_name") or entity_id
+        return f"{name} uploaded {count} attachments to Shipping Container {c_name}."
     elif action == "DELETE_CONTAINER_ATTACHMENT":
-        return f"{name} deleted an attachment from Shipping Container {entity_id}."
+        c_name = details.get("container_name") or entity_id
+        return f"{name} deleted an attachment from Shipping Container {c_name}."
     elif action == "ADD_PO_COMMENT":
-        return f"{name} added a comment to Purchase Order {entity_id}."
+        po_num = details.get("po_number") or entity_id
+        return f"{name} added a comment to Purchase Order {po_num}."
     elif action == "UPDATE_PO_COMMENT":
-        return f"{name} updated a comment on Purchase Order {entity_id}."
+        po_num = details.get("po_number") or entity_id
+        return f"{name} updated a comment on Purchase Order {po_num}."
     elif action == "ADD_PO_ITEM_COMMENT":
-        return f"{name} added a comment to a Purchase Order Item (PO {entity_id})."
+        po_num = details.get("po_number") or "unknown"
+        return f"{name} added a comment to a Purchase Order Item (PO {po_num})."
     elif action == "UPDATE_PO_ITEM_COMMENT":
-        return f"{name} updated a comment on a Purchase Order Item (PO {entity_id})."
+        po_num = details.get("po_number") or "unknown"
+        return f"{name} updated a comment on a Purchase Order Item (PO {po_num})."
     elif action in ["UPDATE_PO_STATUS", "UPDATE_PO_LEAD_TIME"]:
         changes = details.get("changes", [])
         if changes:
             change_strs = []
             for c in changes:
-                field_name = c["field"].replace("_", " ").title()
+                field_name = c.get("field", "")
+                old_val = _clean_val_for_display(c.get("old"), field_name)
+                new_val = _clean_val_for_display(c.get("new"), field_name)
                 
-                old_val = c.get("old")
-                if old_val is None or old_val == "": old_val = "none"
-                
-                new_val = c.get("new")
-                if new_val is None or new_val == "": new_val = "none"
-                
-                change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
+                if old_val == new_val:
+                    continue
+
+                display_field = field_name.replace("_", " ").title()
+                change_strs.append(f"{display_field} changed from {old_val} to {new_val}")
             
-            changes_str = ", ".join(change_strs)
-            return f"{name} updated Purchase Order {entity_id}: {changes_str}."
+            if change_strs:
+                changes_str = ", ".join(change_strs)
+                return f"{name} updated Purchase Order {entity_id}: {changes_str}."
         return f"{name} updated Purchase Order {entity_id}."
     elif action == "SYNC_PO":
         return f"{name} manually synced Purchase Order {entity_id} from SellerCloud."
@@ -116,12 +139,14 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
     elif action == "ADD_ITEM_TO_CONTAINER":
         sku = details.get("sku", "unknown item")
         qty = details.get("qty_added", 0)
-        return f"{name} added {qty} units of {sku} to Container {entity_id}."
+        c_name = details.get("container_name") or entity_id
+        return f"{name} added {qty} units of {sku} to Container {c_name}."
     elif action == "CONTAINER_ITEM_UPDATE":
         msg = details.get("message")
+        c_name = details.get("container_name") or entity_id
         if msg:
             return msg + f" (by {name})"
-        return f"{name} updated an item in container {entity_id}."
+        return f"{name} updated an item in container {c_name}."
     else:
         # Fallback
         if entity_type and entity_id:

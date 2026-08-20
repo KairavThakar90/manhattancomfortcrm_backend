@@ -7,6 +7,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, deferred
 
+from sqlalchemy import Column, String, Boolean, Integer, DateTime, ForeignKey, JSON
+from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 
@@ -33,6 +35,20 @@ class User(Base):
     notify_trucker_email = Column(Boolean, default=False)
     notify_invoice_delayed = Column(Boolean, default=False)
     notify_shipment_delayed = Column(Boolean, default=False)
+    
+    # Column Preferences
+    po_columns = Column(JSON, default={
+        "id": True, "orderId": True, "channel_order_id": True, "status": True,
+        "delay_reason": True, "commentsCount": True, "creationDate": True, 
+        "vendorName": True, "customerName": True, "items": True, "orderedQty": True, 
+        "invoiceDetails": True, "invoiceDelayStatus": True, "expected_delivery_date": True, 
+        "containerIds": True, "actions": True
+    })
+    container_columns = Column(JSON, default={
+        "id": True, "name": True, "warehouse_name": True, "total_items": True,
+        "total_qty_in_container": True, "total_qty_received": True, "arrivalDate": True, 
+        "received_date": True, "actions": True
+    })
     
     is_active = Column(Boolean, default=True, nullable=False)
     otp_code = Column(String(10), nullable=True)
@@ -313,6 +329,7 @@ class ShippingContainer(Base):
     item_links = relationship("PurchaseOrderItemContainer", back_populates="container", cascade="all, delete-orphan")
     warehouse = relationship("Warehouse", back_populates="containers")
     attachments = relationship("ShippingContainerAttachment", back_populates="container", cascade="all, delete-orphan")
+    tracking = relationship("ShippingContainerTracking", back_populates="container", uselist=False, cascade="all, delete-orphan")
 
 class ShippingContainerAttachment(Base):
     __tablename__ = "shipping_container_attachments"
@@ -326,6 +343,36 @@ class ShippingContainerAttachment(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     container = relationship("ShippingContainer", back_populates="attachments")
+
+
+class ShippingContainerTracking(Base):
+    __tablename__ = "shipping_container_tracking"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shipping_container_id = Column(UUID(as_uuid=True), ForeignKey("shipping_containers.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    container_number = Column(String(255), nullable=False, index=True)
+    
+    # Milestone & Voyage Info
+    origin_port = Column(String(255))
+    destination_port = Column(String(255))
+    carrier = Column(String(255))
+    vessel_and_voyage = Column(String(255))
+    etd = Column(DateTime(timezone=True))
+    eta = Column(DateTime(timezone=True))
+    status = Column(String(100))
+    
+    # GPS Geo-Location Info
+    latitude = Column(Numeric(10, 6))
+    longitude = Column(Numeric(10, 6))
+    location_status = Column(String(100))
+    
+    raw_response = deferred(Column(JSONB))
+    error_message = Column(Text)
+    last_tracked_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    container = relationship("ShippingContainer", back_populates="tracking")
 
 class PurchaseOrderItemContainer(Base):
     __tablename__ = "purchase_order_item_containers"
