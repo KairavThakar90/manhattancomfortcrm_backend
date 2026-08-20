@@ -55,6 +55,10 @@ class UserOut(BaseModel):
     notify_invoice_delayed: bool = False
     notify_shipment_delayed: bool = False
     
+    # Column Preferences
+    po_columns: Optional[dict] = {}
+    container_columns: Optional[dict] = {}
+    
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None
 
@@ -84,6 +88,15 @@ class UserUpdate(BaseModel):
     notify_trucker_email: Optional[bool] = None
     notify_invoice_delayed: Optional[bool] = None
     notify_shipment_delayed: Optional[bool] = None
+    
+    # Column Preferences
+    po_columns: Optional[dict] = None
+    container_columns: Optional[dict] = None
+
+
+class ColumnPreferencesOut(BaseModel):
+    po_columns: dict
+    container_columns: dict
 
 
 class Token(BaseModel):
@@ -250,6 +263,27 @@ class ContainerAttachmentOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class ContainerTrackingOut(BaseModel):
+    id: uuid.UUID
+    shipping_container_id: uuid.UUID
+    container_number: str
+    origin_port: Optional[str] = None
+    destination_port: Optional[str] = None
+    carrier: Optional[str] = None
+    vessel_and_voyage: Optional[str] = None
+    etd: Optional[datetime] = None
+    eta: Optional[datetime] = None
+    status: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_status: Optional[str] = None
+    error_message: Optional[str] = None
+    last_tracked_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class ContainerOut(BaseModel):
     """Container list item — includes summary counts and received status."""
     id: uuid.UUID
@@ -284,6 +318,7 @@ class ContainerOut(BaseModel):
     unique_pos: Optional[int] = None
     po_numbers: List[int] = []
     attachments: List[ContainerAttachmentOut] = []
+    tracking: Optional[ContainerTrackingOut] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -352,6 +387,7 @@ class ContainerDetailOut(BaseModel):
     summary: dict = {}
     items: List[ContainerDetailItemOut] = []
     attachments: List[ContainerAttachmentOut] = []
+    tracking: Optional[ContainerTrackingOut] = None
 
     @computed_field
     def sellercloud_link(self) -> Optional[str]:

@@ -2,7 +2,7 @@
 Container API endpoints
 """
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form
 from sqlalchemy.orm import Session, joinedload
@@ -14,7 +14,7 @@ from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
     ContainerUpdate, ContainerAddItems, ContainerActivityCreate, UserActivityLogOut, PaginatedResponse,
-    ContainerAttachmentOut
+    ContainerAttachmentOut, ContainerTrackingOut
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
@@ -658,22 +658,41 @@ async def update_container(
     # Update local DB and track exact changes
     changes = []
     
+    def _normalize_value(v, field_name=""):
+        if v is None or v == "":
+            return None
+        if isinstance(v, (datetime, date)):
+            return v.strftime("%Y-%m-%d")
+        if type(v).__name__ == "Decimal":
+            return str(float(v))
+        if isinstance(v, float):
+            return str(round(v, 4))
+        if isinstance(v, str):
+            s = v.strip()
+            if "date" in field_name.lower() or ("T" in s and len(s) >= 10 and s[4] == '-' and s[7] == '-'):
+                if "T" in s:
+                    s = s.split("T")[0]
+                elif " " in s and len(s) >= 10 and s[4] == '-' and s[7] == '-':
+                    s = s.split(" ")[0]
+            return s
+        return str(v)
+    
     if update_data.container_name is not None and update_data.container_name != container.container_name:
         changes.append({"field": "container_name", "old": container.container_name, "new": update_data.container_name})
         container.container_name = update_data.container_name
         
     if update_data.estimated_arrival_date is not None:
-        old_val = container.estimated_arrival_date.isoformat() if container.estimated_arrival_date else None
-        new_val = update_data.estimated_arrival_date.isoformat() if update_data.estimated_arrival_date else None
-        if old_val != new_val:
-            changes.append({"field": "estimated_arrival_date", "old": old_val, "new": new_val})
+        old_norm = _normalize_value(container.estimated_arrival_date, "estimated_arrival_date")
+        new_norm = _normalize_value(update_data.estimated_arrival_date, "estimated_arrival_date")
+        if old_norm != new_norm:
+            changes.append({"field": "estimated_arrival_date", "old": old_norm, "new": new_norm})
             container.estimated_arrival_date = update_data.estimated_arrival_date
             
     if update_data.received_date is not None:
-        old_val = container.received_date.isoformat() if container.received_date else None
-        new_val = update_data.received_date.isoformat() if update_data.received_date else None
-        if old_val != new_val:
-            changes.append({"field": "received_date", "old": old_val, "new": new_val})
+        old_norm = _normalize_value(container.received_date, "received_date")
+        new_norm = _normalize_value(update_data.received_date, "received_date")
+        if old_norm != new_norm:
+            changes.append({"field": "received_date", "old": old_norm, "new": new_norm})
             container.received_date = update_data.received_date
 
     # Update lifecycle fields dynamically if they are passed in the request
@@ -689,21 +708,11 @@ async def update_container(
             new_val = update_dict[field]
             old_val = getattr(container, field)
             
-            if isinstance(old_val, datetime):
-                old_val_str = old_val.isoformat()
-            else:
-                old_val_str = old_val
-                
-            if isinstance(new_val, datetime):
-                new_val_str = new_val.isoformat()
-            else:
-                new_val_str = new_val
-                
-            def _normalize(v):
-                return None if v == "" else v
+            old_norm = _normalize_value(old_val, field)
+            new_norm = _normalize_value(new_val, field)
 
-            if _normalize(old_val_str) != _normalize(new_val_str):
-                changes.append({"field": field, "old": old_val_str, "new": new_val_str})
+            if old_norm != new_norm:
+                changes.append({"field": field, "old": old_norm, "new": new_norm})
                 
             setattr(container, field, new_val)
 
@@ -769,6 +778,7 @@ async def update_container(
     if changes:
         details_payload["changes"] = changes
         
+    details_payload["container_name"] = container.container_name
     log_activity(db, action="UPDATE_CONTAINER", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details=details_payload)
 
     return {
@@ -956,7 +966,8 @@ def add_items_to_container(
             details={
                 "sku": item.sku,
                 "qty_added": item_data.qty_in_container,
-                "message": f"Added {item_data.qty_in_container} units of {item.sku} to container"
+                "message": f"Added {item_data.qty_in_container} units of {item.sku} to container",
+                "container_name": container.container_name
             }
         )
 
@@ -990,7 +1001,7 @@ def add_container_activity(
         user_id=current_user.id,
         entity_type="CONTAINER",
         entity_id=str(container.id),
-        details={"message": activity_data.message}
+        details={"message": activity_data.message, "container_name": container.container_name}
     )
     return {"success": True, "message": "Activity added successfully"}
 
@@ -1206,7 +1217,7 @@ async def add_container_attachments(
     if uploaded_attachments:
         db.commit()
         
-    log_activity(db, action="ADD_CONTAINER_ATTACHMENTS", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details={"files_uploaded": len(uploaded_attachments)})
+    log_activity(db, action="ADD_CONTAINER_ATTACHMENTS", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details={"files_uploaded": len(uploaded_attachments), "container_name": container.container_name})
     
     return {
         "success": True, 
@@ -1244,10 +1255,12 @@ def delete_container_attachment(
         raise HTTPException(status_code=404, detail="Attachment not found")
         
     container_id = str(attachment.shipping_container_id)
+    container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == attachment.shipping_container_id).first()
+    c_name = container.container_name if container else container_id
     db.delete(attachment)
     db.commit()
     
-    log_activity(db, action="DELETE_CONTAINER_ATTACHMENT", user_id=current_user.id, entity_type="CONTAINER", entity_id=container_id, details={"attachment_id": attachment_id})
+    log_activity(db, action="DELETE_CONTAINER_ATTACHMENT", user_id=current_user.id, entity_type="CONTAINER", entity_id=container_id, details={"attachment_id": attachment_id, "container_name": c_name})
     return {"success": True, "message": "Attachment deleted successfully"}
 
 
@@ -1360,6 +1373,95 @@ def sync_container_from_sellercloud(
             "message": "Error syncing from SellerCloud",
             "error": str(exc)
         }
+
+
+# ---------------------------------------------------------------------------
+# POST /containers/tracking/sync-all
+# Sync AllWays tracking for all containers
+# ---------------------------------------------------------------------------
+@router.post("/tracking/sync-all")
+def sync_all_containers_tracking_endpoint(
+    background_tasks: BackgroundTasks,
+    run_in_background: bool = Query(default=False, description="If true, executes sync in the background"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Syncs live shipment milestones and GPS geo-location for all shipping containers from AllWays.
+    Also updates country_of_origin on each container with the origin_port value.
+    """
+    from app.services.allways_service import sync_all_containers_tracking
+    if run_in_background:
+        def _bg_sync():
+            from app.database import SessionLocal
+            bg_db = SessionLocal()
+            try:
+                sync_all_containers_tracking(bg_db)
+            finally:
+                bg_db.close()
+
+        background_tasks.add_task(_bg_sync)
+        return {
+            "success": True,
+            "message": "Tracking synchronization started in background for all containers"
+        }
+
+    results = sync_all_containers_tracking(db)
+    return {
+        "success": True,
+        "message": f"Successfully processed {results['total_containers']} containers",
+        "details": results
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/tracking/sync
+# Sync AllWays tracking for a specific container
+# ---------------------------------------------------------------------------
+@router.post("/{container_id}/tracking/sync", response_model=ContainerTrackingOut)
+def sync_single_container_tracking_endpoint(
+    container_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Syncs live shipment milestones and GPS geo-location for a single container from AllWays.
+    Updates country_of_origin on the container with the origin_port value.
+    """
+    from app.services.allways_service import sync_container_tracking
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    tracking = sync_container_tracking(db, container)
+    return tracking
+
+
+# ---------------------------------------------------------------------------
+# GET /containers/{container_id}/tracking
+# Get saved tracking info for a container
+# ---------------------------------------------------------------------------
+@router.get("/{container_id}/tracking", response_model=ContainerTrackingOut)
+def get_container_tracking_endpoint(
+    container_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Returns the latest saved tracking and GPS data for a container.
+    """
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    tracking = db.query(models.ShippingContainerTracking).filter(
+        models.ShippingContainerTracking.shipping_container_id == container.id
+    ).first()
+
+    if not tracking:
+        raise HTTPException(status_code=404, detail="No tracking data found for this container")
+
+    return tracking
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ from app.services.activity_service import log_activity
 from app.config import settings
 from app.schemas import (
     Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate, UserMentionOut,
-    UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest
+    UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest, ColumnPreferencesOut
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -250,6 +250,15 @@ def logout(
 def read_current_user(current_user=Depends(auth_utils.get_current_user)):
     """Get current authenticated user information."""
     return current_user
+
+
+@router.get("/me/column-preferences", response_model=ColumnPreferencesOut)
+def get_user_column_preferences(current_user=Depends(auth_utils.get_current_user)):
+    """Get the current user's column preferences for PO and Container listings."""
+    return {
+        "po_columns": current_user.po_columns or {},
+        "container_columns": current_user.container_columns or {}
+    }
 
 
 @router.get("/users", response_model=list[UserOut])

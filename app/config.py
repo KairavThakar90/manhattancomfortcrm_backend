@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
 
+    # AllWays Container Tracking
+    ALLWAYS_BASE_URL: str = "https://allwaysusa.com"
+    ALLWAYS_API_TOKEN: str = "138|bHUzdtrNOUooTywem50XPat1zoMZeQBFdeRP7iJz277d0c4e"
+    ALLWAYS_LOGIN_EMAIL: str = "projectmanager663@gmail.com"
+    ALLWAYS_LOGIN_PASSWORD: str = "StoreTransform@436"
+
     class Config:
         env_file = os.path.join(BASE_DIR, ".env")
 
