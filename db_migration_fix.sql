@@ -124,6 +124,54 @@ CREATE TABLE IF NOT EXISTS sync_logs (
 );
 
 -- ---------------------------------------------------------------------
+-- users table: per-user table column visibility preferences
+-- ---------------------------------------------------------------------
+ALTER TABLE users ADD COLUMN IF NOT EXISTS po_columns JSON DEFAULT '{
+    "id": true, "orderId": true, "channel_order_id": true, "status": true,
+    "delay_reason": true, "commentsCount": true, "creationDate": true,
+    "vendorName": true, "customerName": true, "items": true, "orderedQty": true,
+    "invoiceDetails": true, "invoiceDelayStatus": true, "expected_delivery_date": true,
+    "containerIds": true, "actions": true
+}'::json;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS container_columns JSON DEFAULT '{
+    "id": true, "name": true, "warehouse_name": true, "total_items": true,
+    "total_qty_in_container": true, "total_qty_received": true, "arrivalDate": true,
+    "received_date": true, "actions": true
+}'::json;
+
+-- ---------------------------------------------------------------------
+-- shipping_container_tracking table (AllWays container tracking)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shipping_container_tracking (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shipping_container_id UUID NOT NULL UNIQUE REFERENCES shipping_containers(id) ON DELETE CASCADE,
+    container_number      VARCHAR(255) NOT NULL,
+
+    origin_port           VARCHAR(255),
+    destination_port      VARCHAR(255),
+    carrier               VARCHAR(255),
+    vessel_and_voyage     VARCHAR(255),
+    etd                   TIMESTAMPTZ,
+    eta                   TIMESTAMPTZ,
+    status                VARCHAR(100),
+
+    latitude              NUMERIC(10, 6),
+    longitude             NUMERIC(10, 6),
+    location_status       VARCHAR(100),
+
+    raw_response          JSONB,
+    error_message         TEXT,
+    last_tracked_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_container_tracking_container_id
+    ON shipping_container_tracking (shipping_container_id);
+CREATE INDEX IF NOT EXISTS idx_shipping_container_tracking_container_number
+    ON shipping_container_tracking (container_number);
+
+-- ---------------------------------------------------------------------
 -- optional safe verification queries
 -- ---------------------------------------------------------------------
 SELECT column_name
