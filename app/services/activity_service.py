@@ -59,18 +59,23 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
             change_strs = []
             for c in changes:
                 field_name = c["field"].replace("_", " ").title()
-                old_val = c.get("old", "none") or "none"
-                new_val = c.get("new", "none") or "none"
+                
+                old_val = c.get("old")
+                if old_val is None or old_val == "": old_val = "none"
+                
+                new_val = c.get("new")
+                if new_val is None or new_val == "": new_val = "none"
+                
                 change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
             
             changes_str = ", ".join(change_strs)
-            return f"{name} updated Container {entity_id}: {changes_str}."
-        return f"{name} updated Shipping Container {entity_id}."
+            return f"{name} updated the container: {changes_str}."
+        return f"{name} updated the container."
     elif action == "ADD_CONTAINER_COMMENT":
         msg = details.get("message", "")
         if msg:
-            return f"{name} commented on Container {entity_id}: {msg}"
-        return f"{name} added a comment to Container {entity_id}."
+            return f"{name} commented: {msg}"
+        return f"{name} added a comment."
     elif action == "ADD_CONTAINER_ATTACHMENTS":
         count = details.get("files_uploaded", "attachments")
         return f"{name} uploaded {count} attachments to Shipping Container {entity_id}."
@@ -90,8 +95,13 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
             change_strs = []
             for c in changes:
                 field_name = c["field"].replace("_", " ").title()
-                old_val = c.get("old", "none") or "none"
-                new_val = c.get("new", "none") or "none"
+                
+                old_val = c.get("old")
+                if old_val is None or old_val == "": old_val = "none"
+                
+                new_val = c.get("new")
+                if new_val is None or new_val == "": new_val = "none"
+                
                 change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
             
             changes_str = ", ".join(change_strs)
