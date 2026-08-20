@@ -1012,17 +1012,29 @@ def get_container_activities(
 
     query = db.query(models.UserActivityLog).filter(
         models.UserActivityLog.entity_type == "CONTAINER",
-        models.UserActivityLog.entity_id == str(container.id)
+        models.UserActivityLog.entity_id == str(container.id),
+        ~models.UserActivityLog.action.ilike("VIEW_%"),
+        ~models.UserActivityLog.action.ilike("LIST_%")
     ).order_by(models.UserActivityLog.created_at.desc())
 
     total = query.count()
     logs = query.offset((page - 1) * page_size).limit(page_size).all()
 
+    from app.services.activity_service import generate_human_readable_message
     results = []
     for log in logs:
         log_out = UserActivityLogOut.model_validate(log)
         if log.user:
             log_out.user_name = log.user.full_name or log.user.email
+            
+        log_out.human_readable_message = generate_human_readable_message(
+            action=log.action,
+            entity_type=log.entity_type,
+            entity_id=log.entity_id,
+            details=log.details,
+            user_name=log_out.user_name
+        )
+            
         results.append(log_out.model_dump(mode='python'))
 
     return PaginatedResponse(
