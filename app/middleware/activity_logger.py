@@ -50,6 +50,8 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
 
         # 2. Determine Action
         action, entity_type, entity_id = self._determine_action(method, path)
+        if not action:
+            return
 
         # Skip login/logout as they might already be logged manually in auth routes,
         # but the middleware ensures everything is captured. We'll leave it in.
@@ -111,10 +113,8 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
         if main_resource == "purchase-orders":
             entity_type = "PURCHASE_ORDER"
             if "comments" in parts:
-                if method == "POST": action = "ADD_PO_COMMENT"
-                elif method == "PUT": action = "UPDATE_PO_COMMENT"
-                elif method == "DELETE": action = "DELETE_PO_COMMENT"
-                elif method == "GET": action = "VIEW_PO_COMMENTS"
+                if method == "GET": action = "VIEW_PO_COMMENTS"
+                else: return None, None, None # Router handles ADD/UPDATE/DELETE comments explicitly
             elif "sync" in parts:
                 action = "SYNC_PURCHASE_ORDERS"
             elif "export" in parts:
@@ -122,7 +122,9 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
             elif method == "GET":
                 if entity_id: action = "VIEW_PURCHASE_ORDER_DETAIL"
                 else: action = "VIEW_PURCHASE_ORDER_LIST"
-            elif method == "PUT": action = "UPDATE_PURCHASE_ORDER"
+            elif method in ["PUT", "PATCH", "POST", "DELETE"]:
+                # Router handles UPDATE_PO_STATUS, UPDATE_PO_LEAD_TIME, UPDATE_PO_ITEM_QUANTITY, etc. explicitly
+                return None, None, None
             
         elif main_resource == "containers":
             entity_type = "CONTAINER"
@@ -131,7 +133,9 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
             elif method == "GET":
                 if entity_id: action = "VIEW_CONTAINER_DETAIL"
                 else: action = "VIEW_CONTAINER_LIST"
-            elif method == "PUT": action = "UPDATE_CONTAINER"
+            elif method in ["PUT", "PATCH"]:
+                # The router manually logs UPDATE_CONTAINER
+                return None, None, None
             
         elif main_resource == "vendors":
             entity_type = "VENDOR"

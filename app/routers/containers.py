@@ -699,7 +699,10 @@ async def update_container(
             else:
                 new_val_str = new_val
                 
-            if old_val_str != new_val_str:
+            def _normalize(v):
+                return None if v == "" else v
+
+            if _normalize(old_val_str) != _normalize(new_val_str):
                 changes.append({"field": field, "old": old_val_str, "new": new_val_str})
                 
             setattr(container, field, new_val)

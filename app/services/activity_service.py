@@ -59,8 +59,13 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
             change_strs = []
             for c in changes:
                 field_name = c["field"].replace("_", " ").title()
-                old_val = c.get("old", "none") or "none"
-                new_val = c.get("new", "none") or "none"
+                
+                old_val = c.get("old")
+                if old_val is None or old_val == "": old_val = "none"
+                
+                new_val = c.get("new")
+                if new_val is None or new_val == "": new_val = "none"
+                
                 change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
             
             changes_str = ", ".join(change_strs)
@@ -90,8 +95,13 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
             change_strs = []
             for c in changes:
                 field_name = c["field"].replace("_", " ").title()
-                old_val = c.get("old", "none") or "none"
-                new_val = c.get("new", "none") or "none"
+                
+                old_val = c.get("old")
+                if old_val is None or old_val == "": old_val = "none"
+                
+                new_val = c.get("new")
+                if new_val is None or new_val == "": new_val = "none"
+                
                 change_strs.append(f"{field_name} changed from {old_val} to {new_val}")
             
             changes_str = ", ".join(change_strs)
