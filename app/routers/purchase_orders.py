@@ -340,8 +340,8 @@ def list_purchase_orders(
     sort_by: Optional[str] = Query(None, description="Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     search: Optional[str] = Query(None, description="Search by PO number, order title, or vendor name"),
-    date_from: Optional[datetime] = Query(None, description="Filter POs ordered on or after this date"),
-    date_to: Optional[datetime] = Query(None, description="Filter POs ordered on or before this date"),
+    date_from: Optional[str] = Query(None, description="Filter POs ordered on or after this date (supports YYYY-MM)"),
+    date_to: Optional[str] = Query(None, description="Filter POs ordered on or before this date (supports YYYY-MM)"),
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
     channel_id: Optional[str] = Query(None, description="Filter by local Channel UUID"),
     channel_order_id: Optional[str] = Query(None, description="Filter by explicit Channel Order ID (e.g. 'Schuchman')"),
@@ -475,13 +475,30 @@ def list_purchase_orders(
         q = q.filter(or_(*search_conditions))
         
     if date_from:
-        q = q.filter(models.PurchaseOrder.date_ordered >= date_from)
+        try:
+            import dateutil.parser
+            parsed_date_from = dateutil.parser.parse(date_from)
+            q = q.filter(models.PurchaseOrder.date_ordered >= parsed_date_from)
+        except Exception:
+            pass
+
     if date_to:
-        # If date_to has no time component (midnight), extend it to the end of the day
-        if date_to.time() == datetime.min.time():
-            from datetime import time
-            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
-        q = q.filter(models.PurchaseOrder.date_ordered <= date_to)
+        try:
+            import dateutil.parser
+            import calendar
+            from datetime import time, datetime as dt
+            if len(date_to) == 7 and date_to[4] == '-':
+                year = int(date_to[:4])
+                month = int(date_to[5:7])
+                last_day = calendar.monthrange(year, month)[1]
+                parsed_date_to = dt(year, month, last_day, 23, 59, 59, 999999)
+            else:
+                parsed_date_to = dateutil.parser.parse(date_to)
+                if parsed_date_to.time() == time.min:
+                    parsed_date_to = dt.combine(parsed_date_to.date(), time(23, 59, 59, 999999))
+            q = q.filter(models.PurchaseOrder.date_ordered <= parsed_date_to)
+        except Exception:
+            pass
 
     # Apply sorting
     from sqlalchemy import case
@@ -767,8 +784,11 @@ async def add_po_comment(
 @router.put("/comments/{comment_id}", response_model=POCommentOut)
 async def update_po_comment(
     comment_id: str,
-    comment_data: POCommentUpdate,
+    request: Request,
     background_tasks: BackgroundTasks,
+    comment_text: Optional[str] = Form(None, alias="comment"),
+    tagged_user_ids: Optional[str] = Form(None),
+    files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -779,7 +799,65 @@ async def update_po_comment(
     if comment.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to edit this comment")
         
-    comment.comment = comment_data.comment
+    if comment_text is not None:
+        comment.comment = comment_text
+        
+    # Process Tags
+    import json
+    tagged_users = []
+    if tagged_user_ids:
+        try:
+            tagged_users = json.loads(tagged_user_ids)
+            if not isinstance(tagged_users, list):
+                tagged_users = [tagged_users]
+        except Exception:
+            tagged_users = [uid.strip() for uid in tagged_user_ids.split(",") if uid.strip()]
+            
+    # Process Attachments
+    uploaded_attachments = []
+    email_attachments = []
+    
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}.")
+            
+    for f in files:
+        if not f.filename:
+            continue
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        from app.services.gcs_service import upload_file_to_gcs
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.PurchaseOrderCommentAttachment(
+            comment_id=comment.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        email_attachments.append({
+            "file_name": f.filename,
+            "content": file_bytes,
+            "content_type": f.content_type
+        })
+        
     comment.is_edited = True
     db.commit()
     db.refresh(comment)
@@ -790,7 +868,7 @@ async def update_po_comment(
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?comment_id={comment.id}" if po else ""
     await process_comment_tags(
         db=db,
-        tagged_user_ids=comment_data.tagged_user_ids,
+        tagged_user_ids=tagged_users,
         commenter_name=comment.user_name,
         link=link,
         background_tasks=background_tasks,
@@ -798,7 +876,8 @@ async def update_po_comment(
         section="Purchase Orders",
         po_number=str(po.sellercloud_po_id) if po else None,
         sku=None,
-        comment_text=comment.comment
+        comment_text=comment.comment,
+        attachments=email_attachments
     )
     
     log_activity(db, action="UPDATE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": str(comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
@@ -1035,8 +1114,11 @@ async def add_po_item_comment(
 @router.put("/items/comments/{comment_id}", response_model=POItemCommentOut)
 async def update_po_item_comment(
     comment_id: str,
-    comment_data: POCommentUpdate,
+    request: Request,
     background_tasks: BackgroundTasks,
+    comment_text: Optional[str] = Form(None, alias="comment"),
+    tagged_user_ids: Optional[str] = Form(None),
+    files: list[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -1047,7 +1129,65 @@ async def update_po_item_comment(
     if comment.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to edit this comment")
         
-    comment.comment = comment_data.comment
+    if comment_text is not None:
+        comment.comment = comment_text
+        
+    # Process Tags
+    import json
+    tagged_users = []
+    if tagged_user_ids:
+        try:
+            tagged_users = json.loads(tagged_user_ids)
+            if not isinstance(tagged_users, list):
+                tagged_users = [tagged_users]
+        except Exception:
+            tagged_users = [uid.strip() for uid in tagged_user_ids.split(",") if uid.strip()]
+            
+    # Process Attachments
+    uploaded_attachments = []
+    email_attachments = []
+    
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}.")
+            
+    for f in files:
+        if not f.filename:
+            continue
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        from app.services.gcs_service import upload_file_to_gcs
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.PurchaseOrderItemCommentAttachment(
+            comment_id=comment.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        email_attachments.append({
+            "file_name": f.filename,
+            "content": file_bytes,
+            "content_type": f.content_type
+        })
+        
     comment.is_edited = True
     db.commit()
     db.refresh(comment)
@@ -1059,7 +1199,7 @@ async def update_po_item_comment(
     link = f"{settings.FRONTEND_ORIGIN}/purchase-orders/{po.sellercloud_po_id}?item_id={item.sellercloud_item_id}&comment_id={comment.id}" if po else ""
     await process_comment_tags(
         db=db,
-        tagged_user_ids=comment_data.tagged_user_ids,
+        tagged_user_ids=tagged_users,
         commenter_name=comment.user_name,
         link=link,
         background_tasks=background_tasks,
@@ -1067,7 +1207,8 @@ async def update_po_item_comment(
         section="Purchase Orders",
         po_number=str(po.sellercloud_po_id) if po else None,
         sku=item.sku if item else None,
-        comment_text=comment.comment
+        comment_text=comment.comment,
+        attachments=email_attachments
     )
     
     log_activity(db, action="UPDATE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": str(comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
@@ -2443,6 +2584,7 @@ def export_multiple_pos_csv(
                 .joinedload(models.PurchaseOrderItem.container_links)
                 .joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.channel),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
@@ -2556,6 +2698,7 @@ def export_multiple_pos_csv(
         "PO ID": lambda p, i, c_name, c_eta: p.sellercloud_po_id,
         "PO Title": lambda p, i, c_name, c_eta: p.purchase_title or "",
         "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
+        "Customer Name": lambda p, i, c_name, c_eta: f"{p.customer.first_name or ''} {p.customer.last_name or ''}".strip() if p.customer else "",
         "Channel": lambda p, i, c_name, c_eta: p.channel.name if p.channel else "",
         "Channel Order ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
         "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
@@ -2611,16 +2754,23 @@ def export_multiple_pos_csv(
             row = [column_map[col](po, None, "", "") for col in selected_cols]
             writer.writerow(row)
         else:
+            seen_rows = set()
+            first_row_written = False
             for idx, item in enumerate(po.items):
                 c_name, c_eta = get_container_info(item)
                 row = [column_map[col](po, item, c_name, c_eta) for col in selected_cols]
                 
-                # Blank out Notes for subsequent items to avoid duplication
-                if idx > 0 and "Notes" in selected_cols:
-                    notes_idx = selected_cols.index("Notes")
-                    row[notes_idx] = ""
+                row_tuple = tuple(row)
+                if row_tuple not in seen_rows:
+                    seen_rows.add(row_tuple)
                     
-                writer.writerow(row)
+                    # Blank out Notes for subsequent rows to avoid duplication
+                    if first_row_written and "Notes" in selected_cols:
+                        notes_idx = selected_cols.index("Notes")
+                        row[notes_idx] = ""
+                        
+                    writer.writerow(row)
+                    first_row_written = True
 
     output.seek(0)
     return StreamingResponse(
