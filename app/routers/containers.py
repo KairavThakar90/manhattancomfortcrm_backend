@@ -1240,6 +1240,7 @@ async def add_container_attachments(
 @router.delete("/attachments/{attachment_id}")
 def delete_container_attachment(
     attachment_id: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -1258,6 +1259,10 @@ def delete_container_attachment(
     container_id = str(attachment.shipping_container_id)
     container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == attachment.shipping_container_id).first()
     c_name = container.container_name if container else container_id
+    
+    from app.services.gcs_service import delete_file_from_gcs
+    background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+    
     db.delete(attachment)
     db.commit()
     

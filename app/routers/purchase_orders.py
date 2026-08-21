@@ -799,6 +799,56 @@ async def update_po_comment(
     log_activity(db, action="UPDATE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": str(comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
     return comment
 
+@router.delete("/comments/{comment_id}")
+def delete_po_comment(
+    comment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    comment = db.query(models.PurchaseOrderComment).filter(models.PurchaseOrderComment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+        
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == comment.purchase_order_id).first()
+    
+    from app.services.gcs_service import delete_file_from_gcs
+    for attachment in comment.attachments:
+        if attachment.file_url:
+            background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+            
+    db.delete(comment)
+    db.commit()
+    
+    log_activity(db, action="DELETE_PO_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id) if po else None, details={"comment_id": comment_id, "po_number": str(po.sellercloud_po_id) if po else None})
+    return {"success": True, "message": "Comment deleted successfully"}
+
+@router.delete("/comments/attachments/{attachment_id}")
+def delete_po_comment_attachment(
+    attachment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    attachment = db.query(models.PurchaseOrderCommentAttachment).filter(models.PurchaseOrderCommentAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+        
+    comment = attachment.comment
+    if comment and comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this attachment")
+        
+    from app.services.gcs_service import delete_file_from_gcs
+    if attachment.file_url:
+        background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+        
+    db.delete(attachment)
+    db.commit()
+    
+    return {"success": True, "message": "Attachment deleted successfully"}
+
 @router.get("/items/{item_id}/comments", response_model=list[POItemCommentOut])
 def get_po_item_comments(
     item_id: str,
@@ -1019,6 +1069,56 @@ async def update_po_item_comment(
     log_activity(db, action="UPDATE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": str(comment.id), "po_number": str(po.sellercloud_po_id) if po else None})
     return comment
 
+@router.delete("/items/comments/{comment_id}")
+def delete_po_item_comment(
+    comment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    comment = db.query(models.PurchaseOrderItemComment).filter(models.PurchaseOrderItemComment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+        
+    item = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == comment.purchase_order_item_id).first()
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == item.purchase_order_id).first() if item else None
+    
+    from app.services.gcs_service import delete_file_from_gcs
+    for attachment in comment.attachments:
+        if attachment.file_url:
+            background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+            
+    db.delete(comment)
+    db.commit()
+    
+    log_activity(db, action="DELETE_PO_ITEM_COMMENT", user_id=current_user.id, entity_type="PURCHASE_ORDER_ITEM", entity_id=str(item.id) if item else None, details={"comment_id": comment_id, "po_number": str(po.sellercloud_po_id) if po else None})
+    return {"success": True, "message": "Item comment deleted successfully"}
+
+@router.delete("/items/comments/attachments/{attachment_id}")
+def delete_po_item_comment_attachment(
+    attachment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    attachment = db.query(models.PurchaseOrderItemCommentAttachment).filter(models.PurchaseOrderItemCommentAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+        
+    comment = attachment.comment
+    if comment and comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this attachment")
+        
+    from app.services.gcs_service import delete_file_from_gcs
+    if attachment.file_url:
+        background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+        
+    db.delete(attachment)
+    db.commit()
+    
+    return {"success": True, "message": "Attachment deleted successfully"}
 
 def auto_sync_po_background(po_id: int):
     import logging

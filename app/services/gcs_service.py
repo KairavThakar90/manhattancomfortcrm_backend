@@ -73,3 +73,40 @@ async def upload_file_to_gcs_background(file_obj: bytes, unique_filename: str, c
    
     # Run both the CPU-intensive compression and the blocking upload in a separate thread
     await run_in_threadpool(compress_and_upload, file_obj, content_type, blob)
+
+async def delete_file_from_gcs(public_url: str):
+    """
+    Deletes a file from Google Cloud Storage given its public URL.
+    """
+    if not public_url:
+        return
+        
+    # Extract the unique filename from the URL
+    # Example URL: https://storage.googleapis.com/bucket-name/attachments/uuid_filename.ext
+    bucket_prefix = f"https://storage.googleapis.com/{settings.GCS_BUCKET_NAME}/"
+    if not public_url.startswith(bucket_prefix):
+        print(f"Skipping GCS deletion: URL does not match bucket prefix. ({public_url})")
+        return
+        
+    unique_filename = public_url.replace(bucket_prefix, "")
+    
+    client = get_gcs_client()
+    if not client:
+        return
+        
+    try:
+        bucket = client.bucket(settings.GCS_BUCKET_NAME)
+        blob = bucket.blob(unique_filename)
+        
+        from starlette.concurrency import run_in_threadpool
+        
+        def delete_blob():
+            if blob.exists():
+                blob.delete()
+                print(f"Successfully deleted {unique_filename} from GCS.")
+            else:
+                print(f"File {unique_filename} not found in GCS.")
+                
+        await run_in_threadpool(delete_blob)
+    except Exception as e:
+        print(f"Error deleting file from GCS: {e}")
