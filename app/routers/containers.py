@@ -205,7 +205,8 @@ def list_containers(
                 date_emptied=ctr.date_emptied,
                 unloaded_by=ctr.unloaded_by,
                 unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
-                container_cost_drayage=float(ctr.container_cost_drayage) if ctr.container_cost_drayage is not None else None,
+                container_shipping_cost=float(ctr.container_shipping_cost) if getattr(ctr, 'container_shipping_cost', None) is not None else None,
+                drayage_cost=float(ctr.drayage_cost) if getattr(ctr, 'drayage_cost', None) is not None else None,
                 customs_duty_misc=float(ctr.customs_duty_misc) if ctr.customs_duty_misc is not None else None,
                 per_diem=float(ctr.per_diem) if ctr.per_diem is not None else None,
                 country_of_origin=ctr.country_of_origin,
@@ -539,7 +540,8 @@ def create_container(
         date_emptied=container_data.date_emptied,
         unloaded_by=container_data.unloaded_by,
         unload_cost=container_data.unload_cost,
-        container_cost_drayage=container_data.container_cost_drayage,
+        container_shipping_cost=container_data.container_shipping_cost,
+        drayage_cost=container_data.drayage_cost,
         customs_duty_misc=container_data.customs_duty_misc,
         per_diem=container_data.per_diem,
         country_of_origin=container_data.country_of_origin,
@@ -699,7 +701,7 @@ async def update_container(
     update_dict = update_data.model_dump(exclude_unset=True)
     lifecycle_fields = [
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
-        "unload_cost", "container_cost_drayage", "customs_duty_misc", 
+        "unload_cost", "container_shipping_cost", "drayage_cost", "customs_duty_misc", 
         "per_diem", "country_of_origin", "receiving_closure_notes", 
         "factory_credit_needed", "trucker_email"
     ]
@@ -1139,7 +1141,8 @@ def get_container_details(
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
-        container_cost_drayage=float(container.container_cost_drayage) if container.container_cost_drayage is not None else None,
+        container_shipping_cost=float(container.container_shipping_cost) if getattr(container, 'container_shipping_cost', None) is not None else None,
+        drayage_cost=float(container.drayage_cost) if getattr(container, 'drayage_cost', None) is not None else None,
         customs_duty_misc=float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
         per_diem=float(container.per_diem) if container.per_diem is not None else None,
         country_of_origin=container.country_of_origin,
