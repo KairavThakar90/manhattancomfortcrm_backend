@@ -2309,11 +2309,15 @@ def trigger_allways_sync_all(background_tasks: BackgroundTasks):
     Triggers a background job to sync all active containers with AllWays API.
     """
     def background_sync_all_tracking():
+        print("Starting AllWays background sync...", flush=True)
         from app.database import SessionLocal
         db = SessionLocal()
         try:
             from app.services.allways_service import sync_all_containers_tracking
             sync_all_containers_tracking(db)
+            print("Finished AllWays background sync.", flush=True)
+        except Exception as e:
+            print(f"CRITICAL ERROR in AllWays background sync: {e}", flush=True)
         finally:
             db.close()
             
