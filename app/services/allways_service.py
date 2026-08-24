@@ -133,6 +133,7 @@ def track_container(container_number: str, session: Optional[requests.Session] =
         "latitude": None,
         "longitude": None,
         "location_status": None,
+        "picked_up": None,
         "raw_response": {},
         "error_message": None
     }
@@ -150,6 +151,12 @@ def track_container(container_number: str, session: Optional[requests.Session] =
         result["etd"] = parse_date(shipment_raw.get("etd"))
         result["eta"] = parse_date(shipment_raw.get("eta"))
         result["status"] = shipment_raw.get("status")
+        
+        container_infos = shipment_raw.get("container_info", [])
+        for ci in container_infos:
+            if ci.get("number") == container_number:
+                result["picked_up"] = parse_date(ci.get("picked_up"))
+                break
     elif ship_err:
         errors.append(f"Shipment API: {ship_err}")
 
@@ -226,9 +233,44 @@ def sync_container_tracking(
     tracking.last_tracked_at = datetime.utcnow()
     tracking.updated_at = datetime.utcnow()
 
-    # Automatically update country_of_origin on container if origin_port is available
+    # Automatically update container fields
     if tracking_data.get("origin_port"):
-        container.country_of_origin = tracking_data["origin_port"]
+        port_str = tracking_data["origin_port"]
+        port_str_upper = port_str.upper()
+        
+        # Specific rule for Vietnam ports (sometimes missing comma)
+        if "VIETNAM" in port_str_upper:
+            container.country_of_origin = "CHINA"
+        # Extract country (last part after comma) if available
+        elif "," in port_str:
+            container.country_of_origin = port_str.split(",")[-1].strip()
+        else:
+            container.country_of_origin = port_str.strip()
+            
+    if tracking_data.get("destination_port"):
+        dest_str = tracking_data["destination_port"].upper()
+        warehouse_name_query = None
+        
+        if "NEW YORK" in dest_str or " NY" in dest_str or dest_str == "NY":
+            warehouse_name_query = "South Brunswick"
+        elif "LOS ANGELES" in dest_str or " CA" in dest_str or dest_str == "CA":
+            warehouse_name_query = "California"
+            
+        if warehouse_name_query:
+            warehouse = db.query(models.Warehouse).filter(
+                models.Warehouse.name.ilike(f"%{warehouse_name_query}%")
+            ).first()
+            if warehouse:
+                container.warehouse_id = warehouse.id
+            
+    if tracking_data.get("eta"):
+        container.estimated_arrival_date = tracking_data["eta"]
+        
+    if tracking_data.get("picked_up"):
+        container.date_dropped_off = tracking_data["picked_up"]
+        
+    if tracking_data.get("raw_response"):
+        container.raw_json = tracking_data["raw_response"]
 
     db.commit()
     db.refresh(tracking)
@@ -256,13 +298,16 @@ def sync_all_containers_tracking(db: Session) -> Dict[str, Any]:
             continue
             
         try:
+            print(f"Syncing container: {c_num} ...")
             tracking = sync_container_tracking(db, container, session=session)
             if tracking.error_message and not tracking.origin_port and not tracking.latitude:
                 failed_count += 1
                 status_str = f"Failed: {tracking.error_message}"
+                print(f"  -> {status_str}")
             else:
                 success_count += 1
                 status_str = "Success"
+                print(f"  -> Success")
                 
             results.append({
                 "container_id": str(container.id),
@@ -275,6 +320,7 @@ def sync_all_containers_tracking(db: Session) -> Dict[str, Any]:
             })
         except Exception as exc:
             failed_count += 1
+            print(f"  -> Error: {str(exc)}")
             results.append({
                 "container_id": str(container.id),
                 "container_number": c_num,

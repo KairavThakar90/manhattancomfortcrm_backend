@@ -304,7 +304,8 @@ class ContainerOut(BaseModel):
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
-    container_cost_drayage: Optional[float] = None
+    container_shipping_cost: Optional[float] = None
+    drayage_cost: Optional[float] = None
     customs_duty_misc: Optional[float] = None
     per_diem: Optional[float] = None
     country_of_origin: Optional[str] = None
@@ -377,7 +378,8 @@ class ContainerDetailOut(BaseModel):
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
-    container_cost_drayage: Optional[float] = None
+    container_shipping_cost: Optional[float] = None
+    drayage_cost: Optional[float] = None
     customs_duty_misc: Optional[float] = None
     per_diem: Optional[float] = None
     country_of_origin: Optional[str] = None
@@ -416,7 +418,8 @@ class ContainerCreate(BaseModel):
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
-    container_cost_drayage: Optional[float] = None
+    container_shipping_cost: Optional[float] = None
+    drayage_cost: Optional[float] = None
     customs_duty_misc: Optional[float] = None
     per_diem: Optional[float] = None
     country_of_origin: Optional[str] = None
@@ -437,7 +440,8 @@ class ContainerUpdate(BaseModel):
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
-    container_cost_drayage: Optional[float] = None
+    container_shipping_cost: Optional[float] = None
+    drayage_cost: Optional[float] = None
     customs_duty_misc: Optional[float] = None
     per_diem: Optional[float] = None
     country_of_origin: Optional[str] = None
