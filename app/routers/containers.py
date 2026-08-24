@@ -2302,3 +2302,20 @@ async def import_containers_csv(
         "updates": updates,
         "issues_count": 0
     }
+
+@router.post("/tracking/sync-all")
+def trigger_allways_sync_all(background_tasks: BackgroundTasks):
+    """
+    Triggers a background job to sync all active containers with AllWays API.
+    """
+    def background_sync_all_tracking():
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            from app.services.allways_service import sync_all_containers_tracking
+            sync_all_containers_tracking(db)
+        finally:
+            db.close()
+            
+    background_tasks.add_task(background_sync_all_tracking)
+    return {"success": True, "message": "AllWays container sync started in the background."}
