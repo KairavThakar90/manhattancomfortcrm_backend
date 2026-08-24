@@ -61,8 +61,12 @@ def list_containers(
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
-    date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
-    date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date (Legacy)"),
+    date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date (Legacy)"),
+    receive_date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
+    receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
+    eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
     sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
@@ -140,15 +144,26 @@ def list_containers(
             
         query = query.filter(models.ShippingContainer.id.in_(po_query))
 
-    # Filter by received date range
-    if date_from:
-        query = query.filter(models.ShippingContainer.received_date >= date_from)
-    if date_to:
-        # If date_to has no time component (midnight), extend it to the end of the day
-        if date_to.time() == datetime.min.time():
+    # Filter by received date range (using new or legacy params)
+    actual_receipt_from = receive_date_from or date_from
+    if actual_receipt_from:
+        query = query.filter(models.ShippingContainer.received_date >= actual_receipt_from)
+        
+    actual_receipt_to = receive_date_to or date_to
+    if actual_receipt_to:
+        if actual_receipt_to.time() == datetime.min.time():
             from datetime import time
-            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
-        query = query.filter(models.ShippingContainer.received_date <= date_to)
+            actual_receipt_to = datetime.combine(actual_receipt_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.received_date <= actual_receipt_to)
+
+    # Filter by ETA date range
+    if eta_from:
+        query = query.filter(models.ShippingContainer.estimated_arrival_date >= eta_from)
+    if eta_to:
+        if eta_to.time() == datetime.min.time():
+            from datetime import time
+            eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
 
     if sort_by == "eta_delivery":
         sort_col = models.ShippingContainer.estimated_arrival_date
@@ -761,6 +776,7 @@ async def update_container(
     if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
         from app.services.email_service import send_container_emptied_notification
         formatted_date = container.date_emptied.strftime('%Y-%m-%d')
+        formatted_dropped_date = container.date_dropped_off.strftime('%Y-%m-%d') if container.date_dropped_off else None
         
         users_to_notify = db.query(models.User).filter(models.User.notify_trucker_email == True).all()
         cc_emails = [u.email for u in users_to_notify if u.email]
@@ -771,6 +787,7 @@ async def update_container(
             container_name=container.container_name,
             date_emptied=formatted_date,
             door_name=container.door,
+            date_dropped_off=formatted_dropped_date,
             cc_emails=cc_emails
         )
         container.last_notified_trucker_email = container.trucker_email
@@ -2176,4 +2193,36 @@ def validate_container_items_bulk(
         "success": True,
         "message": f"Validated {len(results)} rows",
         "data": results
+    }
+
+
+@router.get("/allways/search/{container_number}")
+def search_allways_container(
+    container_number: str, 
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Searches a container directly in AllWays USA by its container number.
+    Returns its live ETA and Destination Port from AllWays.
+    """
+    from app.services.allways_service import track_container
+    from fastapi import HTTPException
+    
+    result = track_container(container_number)
+    
+    # If the response doesn't have valid basic details (or has an error), return 404/400
+    if result.get("error_message"):
+        if "not found" in result["error_message"].lower():
+            raise HTTPException(status_code=404, detail=result["error_message"])
+        raise HTTPException(status_code=400, detail=result["error_message"])
+        
+    return {
+        "success": True,
+        "container_number": container_number,
+        "eta": result.get("eta"),
+        "destination_port": result.get("destination_port"),
+        "origin_port": result.get("origin_port"),
+        "carrier": result.get("carrier"),
+        "status": result.get("status"),
+        "location_status": result.get("location_status")
     }

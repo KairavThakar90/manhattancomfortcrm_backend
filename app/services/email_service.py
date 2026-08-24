@@ -267,7 +267,7 @@ async def send_po_status_update_email(
         logger.error(f"Failed to send PO status update email: {e}")
 
 
-async def send_container_emptied_notification(email_to: str, container_name: str, date_emptied: str, door_name: str = None, cc_emails: list = None):
+async def send_container_emptied_notification(email_to: str, container_name: str, date_emptied: str, door_name: str = None, date_dropped_off: str = None, cc_emails: list = None):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         return
 
@@ -278,6 +278,14 @@ async def send_container_emptied_notification(email_to: str, container_name: str
         from datetime import datetime
         dt = datetime.strptime(date_emptied, "%Y-%m-%d")
         display_date = dt.strftime("%B %d, %Y")
+    except Exception:
+        pass
+        
+    display_dropped_date = date_dropped_off if date_dropped_off else "N/A"
+    try:
+        if date_dropped_off:
+            dt_dropped = datetime.strptime(date_dropped_off, "%Y-%m-%d")
+            display_dropped_date = dt_dropped.strftime("%B %d, %Y")
     except Exception:
         pass
         
@@ -302,7 +310,11 @@ async def send_container_emptied_notification(email_to: str, container_name: str
                 <td style="padding: 12px; border: 1px solid #ddd;">Emptied</td>
             </tr>
             <tr>
-                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Date</td>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Dropped Date</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">{display_dropped_date}</td>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Empty Date</td>
                 <td style="padding: 12px; border: 1px solid #ddd;">{display_date}</td>
             </tr>
             <tr>
