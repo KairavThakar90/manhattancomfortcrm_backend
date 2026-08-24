@@ -284,6 +284,28 @@ class ContainerTrackingOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class LogisticsCompanyBase(BaseModel):
+    name: str
+    primary_email: Optional[str] = None
+    cc_email: Optional[str] = None
+
+class LogisticsCompanyCreate(LogisticsCompanyBase):
+    pass
+
+class LogisticsCompanyUpdate(BaseModel):
+    name: Optional[str] = None
+    primary_email: Optional[str] = None
+    cc_email: Optional[str] = None
+
+class LogisticsCompanyOut(LogisticsCompanyBase):
+    id: uuid.UUID
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+        from_attributes = True
+
+
 class ContainerOut(BaseModel):
     """Container list item — includes summary counts and received status."""
     id: uuid.UUID
@@ -301,6 +323,9 @@ class ContainerOut(BaseModel):
     date_dropped_off: Optional[datetime] = None
     door: Optional[str] = None
     trucker_email: Optional[str] = None
+    trucking_company: Optional[str] = None
+    logistics_company_id: Optional[uuid.UUID] = None
+    logistics_company: Optional[LogisticsCompanyOut] = None
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
@@ -375,6 +400,9 @@ class ContainerDetailOut(BaseModel):
     date_dropped_off: Optional[datetime] = None
     door: Optional[str] = None
     trucker_email: Optional[str] = None
+    trucking_company: Optional[str] = None
+    logistics_company_id: Optional[uuid.UUID] = None
+    logistics_company: Optional[LogisticsCompanyOut] = None
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
@@ -448,6 +476,9 @@ class ContainerUpdate(BaseModel):
     receiving_closure_notes: Optional[str] = None
     factory_credit_needed: Optional[str] = None
     trucker_email: Optional[str] = None
+    trucking_company: Optional[str] = None
+    logistics_company_id: Optional[uuid.UUID] = None
+    logistics_company: Optional[LogisticsCompanyOut] = None
 
 
 class ContainerAddItems(BaseModel):
@@ -680,6 +711,7 @@ class PurchaseOrderOut(BaseModel):
     
     # Status flags
     is_invoice_delayed: Optional[str] = None  # "Yes" or "No"
+    approved_status: Optional[str] = None  # "On Time", "Pending", "Delay"
     is_container_overdue: Optional[str] = None  # "Yes" or "No"
     
     # Delay Details (Per Container)
@@ -763,11 +795,18 @@ class PurchaseOrderOut(BaseModel):
         # 1. Check if invoice is delayed (missing after 10 days)
         if instance.invoice_date:
             instance.is_invoice_delayed = "No"  # Has invoice
+            instance.approved_status = "On Time"
         elif instance.created_on:
             days_since_creation = (today - instance.created_on.date()).days
-            instance.is_invoice_delayed = "Yes" if days_since_creation > 10 else "No"
+            if days_since_creation > 10:
+                instance.is_invoice_delayed = "Yes"
+                instance.approved_status = "Delay"
+            else:
+                instance.is_invoice_delayed = "No"
+                instance.approved_status = "Pending"
         else:
             instance.is_invoice_delayed = "No"
+            instance.approved_status = "Pending"
         
         # 2. Check container delays individually
         instance.delay_details = {
