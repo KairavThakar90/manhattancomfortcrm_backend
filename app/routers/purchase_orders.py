@@ -476,18 +476,19 @@ def list_purchase_orders(
         
     if date_from:
         try:
-            import dateutil.parser
-            from datetime import timezone
-            parsed_date_from = dateutil.parser.parse(date_from)
-            if parsed_date_from.tzinfo is None:
-                parsed_date_from = parsed_date_from.replace(tzinfo=timezone.utc)
+            from datetime import datetime as dt, timezone
+            if len(date_from) == 7 and date_from[4] == '-':
+                parsed_date_from = dt(int(date_from[:4]), int(date_from[5:7]), 1, tzinfo=timezone.utc)
+            else:
+                parsed_date_from = dt.fromisoformat(date_from.replace("Z", "+00:00"))
+                if parsed_date_from.tzinfo is None:
+                    parsed_date_from = parsed_date_from.replace(tzinfo=timezone.utc)
             q = q.filter(models.PurchaseOrder.date_ordered >= parsed_date_from)
         except Exception as e:
             print(f"Exception in date_from: {e}")
 
     if date_to:
         try:
-            import dateutil.parser
             import calendar
             from datetime import time, datetime as dt, timezone
             if len(date_to) == 7 and date_to[4] == '-':
@@ -496,7 +497,7 @@ def list_purchase_orders(
                 last_day = calendar.monthrange(year, month)[1]
                 parsed_date_to = dt(year, month, last_day, 23, 59, 59, 999999, tzinfo=timezone.utc)
             else:
-                parsed_date_to = dateutil.parser.parse(date_to)
+                parsed_date_to = dt.fromisoformat(date_to.replace("Z", "+00:00"))
                 if parsed_date_to.tzinfo is None:
                     parsed_date_to = parsed_date_to.replace(tzinfo=timezone.utc)
                 if parsed_date_to.time() == time.min:
