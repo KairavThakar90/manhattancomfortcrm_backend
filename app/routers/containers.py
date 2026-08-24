@@ -61,8 +61,10 @@ def list_containers(
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
-    date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
-    date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    receive_date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
+    receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
+    eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
     sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
@@ -141,14 +143,36 @@ def list_containers(
         query = query.filter(models.ShippingContainer.id.in_(po_query))
 
     # Filter by received date range
-    if date_from:
-        query = query.filter(models.ShippingContainer.received_date >= date_from)
-    if date_to:
-        # If date_to has no time component (midnight), extend it to the end of the day
-        if date_to.time() == datetime.min.time():
-            from datetime import time
-            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
-        query = query.filter(models.ShippingContainer.received_date <= date_to)
+    if receive_date_from:
+        if receive_date_from.tzinfo is None:
+            from datetime import timezone
+            receive_date_from = receive_date_from.replace(tzinfo=timezone.utc)
+        query = query.filter(models.ShippingContainer.received_date >= receive_date_from)
+        
+    if receive_date_to:
+        if receive_date_to.time() == datetime.min.time():
+            from datetime import time, timezone
+            receive_date_to = datetime.combine(receive_date_to.date(), time(23, 59, 59, 999999)).replace(tzinfo=timezone.utc)
+        elif receive_date_to.tzinfo is None:
+            from datetime import timezone
+            receive_date_to = receive_date_to.replace(tzinfo=timezone.utc)
+        query = query.filter(models.ShippingContainer.received_date <= receive_date_to)
+
+    # Filter by ETA date range
+    if eta_from:
+        if eta_from.tzinfo is None:
+            from datetime import timezone
+            eta_from = eta_from.replace(tzinfo=timezone.utc)
+        query = query.filter(models.ShippingContainer.estimated_arrival_date >= eta_from)
+        
+    if eta_to:
+        if eta_to.time() == datetime.min.time():
+            from datetime import time, timezone
+            eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999)).replace(tzinfo=timezone.utc)
+        elif eta_to.tzinfo is None:
+            from datetime import timezone
+            eta_to = eta_to.replace(tzinfo=timezone.utc)
+        query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
 
     if sort_by == "eta_delivery":
         sort_col = models.ShippingContainer.estimated_arrival_date
@@ -205,7 +229,7 @@ def list_containers(
                 date_emptied=ctr.date_emptied,
                 unloaded_by=ctr.unloaded_by,
                 unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
-                container_cost_drayage=float(ctr.container_cost_drayage) if ctr.container_cost_drayage is not None else None,
+                drayage_cost=float(ctr.drayage_cost) if ctr.drayage_cost is not None else None,
                 customs_duty_misc=float(ctr.customs_duty_misc) if ctr.customs_duty_misc is not None else None,
                 per_diem=float(ctr.per_diem) if ctr.per_diem is not None else None,
                 country_of_origin=ctr.country_of_origin,
@@ -539,7 +563,7 @@ def create_container(
         date_emptied=container_data.date_emptied,
         unloaded_by=container_data.unloaded_by,
         unload_cost=container_data.unload_cost,
-        container_cost_drayage=container_data.container_cost_drayage,
+        drayage_cost=container_data.drayage_cost,
         customs_duty_misc=container_data.customs_duty_misc,
         per_diem=container_data.per_diem,
         country_of_origin=container_data.country_of_origin,
@@ -680,7 +704,7 @@ async def update_container(
     update_dict = update_data.model_dump(exclude_unset=True)
     lifecycle_fields = [
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
-        "unload_cost", "container_cost_drayage", "customs_duty_misc", 
+        "unload_cost", "drayage_cost", "customs_duty_misc", 
         "per_diem", "country_of_origin", "receiving_closure_notes", 
         "factory_credit_needed", "trucker_email"
     ]
@@ -1128,7 +1152,7 @@ def get_container_details(
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
-        container_cost_drayage=float(container.container_cost_drayage) if container.container_cost_drayage is not None else None,
+        drayage_cost=float(container.drayage_cost) if container.drayage_cost is not None else None,
         customs_duty_misc=float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
         per_diem=float(container.per_diem) if container.per_diem is not None else None,
         country_of_origin=container.country_of_origin,

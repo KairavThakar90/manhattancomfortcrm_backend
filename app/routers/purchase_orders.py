@@ -477,28 +477,33 @@ def list_purchase_orders(
     if date_from:
         try:
             import dateutil.parser
+            from datetime import timezone
             parsed_date_from = dateutil.parser.parse(date_from)
+            if parsed_date_from.tzinfo is None:
+                parsed_date_from = parsed_date_from.replace(tzinfo=timezone.utc)
             q = q.filter(models.PurchaseOrder.date_ordered >= parsed_date_from)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Exception in date_from: {e}")
 
     if date_to:
         try:
             import dateutil.parser
             import calendar
-            from datetime import time, datetime as dt
+            from datetime import time, datetime as dt, timezone
             if len(date_to) == 7 and date_to[4] == '-':
                 year = int(date_to[:4])
                 month = int(date_to[5:7])
                 last_day = calendar.monthrange(year, month)[1]
-                parsed_date_to = dt(year, month, last_day, 23, 59, 59, 999999)
+                parsed_date_to = dt(year, month, last_day, 23, 59, 59, 999999, tzinfo=timezone.utc)
             else:
                 parsed_date_to = dateutil.parser.parse(date_to)
+                if parsed_date_to.tzinfo is None:
+                    parsed_date_to = parsed_date_to.replace(tzinfo=timezone.utc)
                 if parsed_date_to.time() == time.min:
-                    parsed_date_to = dt.combine(parsed_date_to.date(), time(23, 59, 59, 999999))
+                    parsed_date_to = dt.combine(parsed_date_to.date(), time(23, 59, 59, 999999)).replace(tzinfo=timezone.utc)
             q = q.filter(models.PurchaseOrder.date_ordered <= parsed_date_to)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Exception in date_to: {e}")
 
     # Apply sorting
     from sqlalchemy import case
