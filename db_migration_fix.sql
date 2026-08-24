@@ -178,3 +178,23 @@ SELECT column_name
 FROM information_schema.columns
 WHERE table_name = 'users'
 ORDER BY ordinal_position;
+
+-- ---------------------------------------------------------------------
+-- shipping_containers: rename container_cost_drayage -> container_shipping_cost,
+-- add drayage_cost (commit 66e3963)
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'shipping_containers' AND column_name = 'container_cost_drayage'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'shipping_containers' AND column_name = 'container_shipping_cost'
+    ) THEN
+        ALTER TABLE shipping_containers RENAME COLUMN container_cost_drayage TO container_shipping_cost;
+    END IF;
+END $$;
+
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS container_shipping_cost NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS drayage_cost NUMERIC(14,2);

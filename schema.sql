@@ -284,7 +284,9 @@ ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS door VARCHAR(50);
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS date_emptied TIMESTAMPTZ;
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS unloaded_by VARCHAR(255);
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS unload_cost NUMERIC(14,2);
-ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS container_cost_drayage NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS container_shipping_cost NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS drayage_cost NUMERIC(14,2);
+-- container_cost_drayage renamed to container_shipping_cost; drayage_cost added as a new column (see db_migration_fix.sql)
 
 -- ---------------------------------------------------------
 -- 6d. Shipping container tracking (AllWays container tracking)
