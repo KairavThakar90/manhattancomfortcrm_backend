@@ -232,6 +232,7 @@ def list_containers(
                 logistics_company_id=ctr.logistics_company_id,
                 logistics_company=schemas.LogisticsCompanyOut.from_orm(ctr.logistics_company) if getattr(ctr, 'logistics_company', None) else None,
                 unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
+                container_shipping_cost=float(ctr.container_shipping_cost) if ctr.container_shipping_cost is not None else None,
                 drayage_cost=float(ctr.drayage_cost) if ctr.drayage_cost is not None else None,
                 customs_duty_misc=float(ctr.customs_duty_misc) if ctr.customs_duty_misc is not None else None,
                 per_diem=float(ctr.per_diem) if ctr.per_diem is not None else None,
@@ -707,7 +708,7 @@ async def update_container(
     update_dict = update_data.model_dump(exclude_unset=True)
     lifecycle_fields = [
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
-        "unload_cost", "drayage_cost", "customs_duty_misc", 
+        "unload_cost", "container_shipping_cost", "drayage_cost", "customs_duty_misc", 
         "per_diem", "country_of_origin", "receiving_closure_notes", 
         "factory_credit_needed", "trucker_email"
     ]
@@ -1155,6 +1156,7 @@ def get_container_details(
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
+        container_shipping_cost=float(container.container_shipping_cost) if container.container_shipping_cost is not None else None,
         drayage_cost=float(container.drayage_cost) if container.drayage_cost is not None else None,
         customs_duty_misc=float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
         per_diem=float(container.per_diem) if container.per_diem is not None else None,
