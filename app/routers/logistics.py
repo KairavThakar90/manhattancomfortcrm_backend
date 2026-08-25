@@ -56,3 +56,17 @@ def update_logistics_company(
     db.commit()
     db.refresh(company)
     return company
+
+@router.delete("/{company_id}")
+def delete_logistics_company(
+    company_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    company = db.query(models.LogisticsCompany).filter(models.LogisticsCompany.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Logistics company not found")
+        
+    db.delete(company)
+    db.commit()
+    return {"success": True, "message": "Logistics company deleted successfully"}

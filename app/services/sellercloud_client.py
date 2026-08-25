@@ -157,6 +157,14 @@ class SellerCloudClient:
         resp = self._request("GET", f"/api/PurchaseOrders/{po_id}")
         return resp.json()
 
+    def update_purchase_order_warehouse(self, po_id: int, warehouse_id: int) -> bool:
+        """Update a specific PO's receiving warehouse in SellerCloud."""
+        payload = {
+            "DefaultWarehouseID": warehouse_id
+        }
+        resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}", json=payload)
+        return resp.status_code == 200
+
     def update_purchase_order_item_quantity(self, po_id: int, item_id: int, new_qty: int, unit_price: float) -> bool:
         """Update a specific PO item's ordered quantity in SellerCloud."""
         payload = {

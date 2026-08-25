@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List, Union, Dict, Any
 
-from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field, field_validator
 
 
 # ---------- Auth ----------
@@ -239,6 +239,7 @@ class POItemBasicOut(BaseModel):
     id: uuid.UUID
     sellercloud_item_id: Optional[int] = None
     sku: Optional[str] = None
+    image_url: Optional[str] = None
     qty_ordered: int
 
 
@@ -287,7 +288,14 @@ class ContainerTrackingOut(BaseModel):
 class LogisticsCompanyBase(BaseModel):
     name: str
     primary_email: Optional[str] = None
-    cc_email: Optional[str] = None
+    cc_email: Optional[Union[str, List[str]]] = None
+
+    @field_validator("cc_email", mode="before")
+    @classmethod
+    def parse_cc_email(cls, v):
+        if isinstance(v, list):
+            return ", ".join(str(item).strip() for item in v if item)
+        return v
 
 class LogisticsCompanyCreate(LogisticsCompanyBase):
     pass
@@ -295,7 +303,14 @@ class LogisticsCompanyCreate(LogisticsCompanyBase):
 class LogisticsCompanyUpdate(BaseModel):
     name: Optional[str] = None
     primary_email: Optional[str] = None
-    cc_email: Optional[str] = None
+    cc_email: Optional[Union[str, List[str]]] = None
+
+    @field_validator("cc_email", mode="before")
+    @classmethod
+    def parse_cc_email(cls, v):
+        if isinstance(v, list):
+            return ", ".join(str(item).strip() for item in v if item)
+        return v
 
 class LogisticsCompanyOut(LogisticsCompanyBase):
     id: uuid.UUID
@@ -376,6 +391,7 @@ class ContainerDetailItemOut(BaseModel):
     vendor_name: Optional[str] = None
     sku: Optional[str] = None
     product_name: Optional[str] = None
+    image_url: Optional[str] = None
     qty_in_container: int
     qty_ordered: int
     qty_received: int
@@ -496,6 +512,7 @@ class POItemForContainerOut(BaseModel):
     sellercloud_po_id: Optional[int] = None
     sku: Optional[str] = None
     product_name: Optional[str] = None
+    image_url: Optional[str] = None
     qty_ordered: int
     qty_received: int
     qty_remaining: int                  # qty_ordered - qty_received
@@ -536,6 +553,7 @@ class PurchaseOrderItemOut(BaseModel):
     sellercloud_item_id: Optional[int] = None
     sku: Optional[str] = None
     product_name: Optional[str] = None
+    image_url: Optional[str] = None
     qty_ordered: int
     qty_received: int
     qty_remaining: Optional[int] = None  # Calculated: qty_ordered - qty_received
