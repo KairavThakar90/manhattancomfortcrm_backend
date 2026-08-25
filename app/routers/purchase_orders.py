@@ -10,7 +10,7 @@ from sqlalchemy import and_, or_, cast, String
 
 from app.database import get_db
 from app.auth import get_current_user
-from app import models
+from app import models, schemas
 from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
 from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers
