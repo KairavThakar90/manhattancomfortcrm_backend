@@ -3015,6 +3015,36 @@ def sync_pos_optimized(
         }
 
 
+@router.post("/sync/cleanup-deleted")
+def cleanup_deleted_pos(db: Session = Depends(get_db)):
+    """
+    **DEEP CLEANUP** - Removes Hard-Deleted POs and Empty Containers.
+    
+    Checks every PO in the local database against SellerCloud to find any that 
+    have been completely deleted from SellerCloud. If a PO is deleted, it is 
+    removed from the CRM along with its line items. Any shipping containers 
+    that become completely empty as a result are also deleted.
+    
+    This is a slower operation and should only be run periodically (e.g. weekly).
+    """
+    sync_service = OptimizedSyncService(db)
+    result = sync_service.cleanup_deleted_pos()
+    
+    if result.get("success"):
+        return {
+            "success": True,
+            "message": result.get("message"),
+            "data": result.get("stats", {})
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Cleanup failed",
+            "error": result.get("error"),
+            "data": result.get("stats", {})
+        }
+
+
 @router.post("/sync/containers-selective")
 def sync_containers_optimized(
     po_ids: list[int] = Query(None, description="Specific PO IDs to sync containers for"),

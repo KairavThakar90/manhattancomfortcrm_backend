@@ -22,8 +22,28 @@ class OptimizedSyncService:
     def __init__(self, db: Session):
         self.db = db
         self.client = SellerCloudClient()
+
+    def _cleanup_po_if_exists(self, po_id: int) -> bool:
+        """Helper to delete a PO and its empty containers if it was cancelled/deleted in SC."""
+        from app.models import PurchaseOrder, ShippingContainer
+        po = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id == po_id).first()
+        if po:
+            self.db.delete(po)
+            self.db.commit()
+            
+            # Clean up completely empty containers
+            empty_containers = self.db.query(ShippingContainer).filter(
+                ~ShippingContainer.item_links.any()
+            ).all()
+            for c in empty_containers:
+                self.db.delete(c)
+            self.db.commit()
+            
+            print(f"[OptimizedSync] Deleted PO {po_id} and cleaned up empty containers.")
+            return True
+        return False
     
-    def sync_recent_pos(self, days: int = 7, batch_size: int = 25, view_id: int = None):
+    def sync_recent_pos(self, days: int = 7, batch_size: int = 25, view_id: int = None) -> dict:
         """
         Sync only POs modified in the last N days (default: 7).
         
@@ -100,15 +120,29 @@ class OptimizedSyncService:
                     stats["api_calls"] += 1
                     stats["pos_fetched"] += 1
                     
-                    # Fetch full PO detail (includes Items with QtyInContainer)
-                    detail = self.client.get_purchase_order(po_id)
+                    try:
+                        # Fetch full PO detail (includes Items with QtyInContainer)
+                        detail = self.client.get_purchase_order(po_id)
+                    except Exception as e:
+                        if "500" in str(e):
+                            # SellerCloud throws 500 when fetching a hard-deleted PO
+                            if self._cleanup_po_if_exists(po_id):
+                                stats["pos_skipped"] += 1 # technically deleted, but skipped from upsert
+                            continue
+                        raise e
+                    
+                    mapped = _map_po(detail)
+                    
+                    # If PO is Cancelled (Status 4), delete it locally
+                    if str(mapped.get("purchase_order_status_code")) == "4":
+                        if self._cleanup_po_if_exists(po_id):
+                            stats["pos_skipped"] += 1
+                        continue
                     
                     # Map and get related entities
                     purchase = detail.get("Purchase") or {}
                     vendor = _get_or_create_vendor(self.db, purchase.get("VendorId"))
                     company = _get_or_create_company(self.db, purchase.get("CompanyId"))
-                    
-                    mapped = _map_po(detail)
                     
                     warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
                     warehouse = _get_or_create_warehouse(self.db, warehouse_sc_id)
@@ -390,6 +424,91 @@ class OptimizedSyncService:
                 "stats": stats,
                 "errors": errors,
                 "message": f"Synced containers for {stats['pos_processed']} POs"
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            return {
+                "success": False,
+                "error": str(e),
+                "stats": stats
+            }
+
+    def cleanup_deleted_pos(self) -> dict:
+        """
+        Deep Cleanup for Hard-Deleted POs.
+        Fetches ALL valid PO IDs from SellerCloud using the default view,
+        compares against the local database, and deletes any local POs that
+        no longer exist in SellerCloud.
+        """
+        stats = {
+            "sc_pos_fetched": 0,
+            "local_pos_checked": 0,
+            "pos_deleted": 0,
+            "api_calls": 0,
+            "containers_cleaned": 0
+        }
+        
+        try:
+            # 1. Fetch all valid PO IDs from SellerCloud
+            valid_sc_po_ids = set()
+            page = 1
+            while True:
+                stats["api_calls"] += 1
+                response = self.client.get_purchase_orders_by_view(
+                    view_id=25,
+                    page_number=page,
+                    page_size=100
+                )
+                items = response.get("Items", [])
+                if not items:
+                    break
+                
+                for po in items:
+                    po_id = po.get("ID")
+                    if po_id:
+                        valid_sc_po_ids.add(po_id)
+                    
+                stats["sc_pos_fetched"] += len(items)
+                
+                # If we get fewer items than we asked for (or 0), we've hit the end
+                if len(items) < 10:
+                    break
+                page += 1
+                
+            # 2. Get all local PO IDs
+            from app.models import PurchaseOrder, ShippingContainer
+            local_pos = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id.isnot(None)).all()
+            stats["local_pos_checked"] = len(local_pos)
+            
+            # 3. Find POs that are in local but not in SC
+            deleted_po_ids = []
+            for local_po in local_pos:
+                if local_po.sellercloud_po_id not in valid_sc_po_ids:
+                    deleted_po_ids.append(local_po.sellercloud_po_id)
+            
+            # 4. Delete them locally
+            for po_id in deleted_po_ids:
+                po = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id == po_id).first()
+                if po:
+                    self.db.delete(po)
+                    stats["pos_deleted"] += 1
+            
+            self.db.commit()
+            
+            # 5. Clean up completely empty containers
+            empty_containers = self.db.query(ShippingContainer).filter(
+                ~ShippingContainer.item_links.any()
+            ).all()
+            for c in empty_containers:
+                self.db.delete(c)
+                stats["containers_cleaned"] += 1
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "stats": stats,
+                "message": f"Deep Cleanup completed. Found {stats['sc_pos_fetched']} valid POs in SellerCloud. Deleted {stats['pos_deleted']} local POs and cleaned {stats['containers_cleaned']} empty containers."
             }
             
         except Exception as e:
