@@ -479,15 +479,19 @@ def create_container(
         sc_client = SellerCloudClient()
 
         # STEP 1: Create the container (SC API only accepts name/dates — NOT items)
-        sc_response = sc_client.create_shipping_container(sc_container_payload)
-        if isinstance(sc_response, dict):
-            sellercloud_container_id = (
-                sc_response.get("ID")
-                or sc_response.get("Id")
-                or sc_response.get("ContainerID")
-                or sc_response.get("ContainerId")
-                or sc_response.get("id")
-            )
+        try:
+            sc_response = sc_client.create_shipping_container(sc_container_payload)
+            if isinstance(sc_response, dict):
+                sellercloud_container_id = (
+                    sc_response.get("ID")
+                    or sc_response.get("Id")
+                    or sc_response.get("ContainerID")
+                    or sc_response.get("ContainerId")
+                    or sc_response.get("id")
+                )
+        except Exception as create_err:
+            print(f"[create_container] SC Create failed (maybe duplicate name): {create_err}")
+            sc_response = {"error": str(create_err)}
 
         # Fallback: SC sometimes returns empty body — search by name to recover ID
         if not sellercloud_container_id:

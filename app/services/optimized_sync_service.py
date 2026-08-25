@@ -58,16 +58,16 @@ class OptimizedSyncService:
         }
         
         try:
-            # Step 1: Fetch PO list from view (lightweight, just IDs and basic info)
+            # Step 1: Fetch recently modified POs using SC's updatedDateFrom filter
             page = 1
             po_ids_to_sync = []
             
             while True:
                 stats["api_calls"] += 1
                 
-                # Use the working GetAllByView endpoint
-                response = self.client.get_purchase_orders_by_view(
-                    view_id=view_id or 25,
+                # Fetch only POs updated since cutoff_date
+                response = self.client.get_purchase_orders_updated_since(
+                    updated_from=cutoff_date,
                     page_number=page,
                     page_size=batch_size
                 )
@@ -76,27 +76,18 @@ class OptimizedSyncService:
                 if not items:
                     break
                 
-                # Filter by date locally (check CreatedOn or UpdatedOn)
+                # All returned POs were updated recently, so we just add their IDs
                 for po in items:
-                    created_on_str = po.get("CreatedOn")
-                    if created_on_str:
-                        try:
-                            created_on = datetime.fromisoformat(created_on_str.replace("Z", "+00:00"))
-                            # Only sync POs created in the last N days
-                            if created_on >= cutoff_date:
-                                po_ids_to_sync.append(po.get("ID"))
-                        except:
-                            # If date parsing fails, include it to be safe
-                            po_ids_to_sync.append(po.get("ID"))
-                    else:
-                        # No date, include it
-                        po_ids_to_sync.append(po.get("ID"))
+                    po_ids_to_sync.append(po.get("ID"))
                 
                 # Check if more pages
                 if len(items) < batch_size:
                     break
                 
                 page += 1
+            
+            # Remove duplicates just in case
+            po_ids_to_sync = list(set(po_ids_to_sync))
             
             errors = []
             
@@ -367,8 +358,12 @@ class OptimizedSyncService:
             # If no specific POs, get recent POs (last 30 days)
             if not po_ids:
                 cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                from sqlalchemy import or_
                 recent_pos = self.db.query(models.PurchaseOrder).filter(
-                    models.PurchaseOrder.created_on >= cutoff
+                    or_(
+                        models.PurchaseOrder.created_on >= cutoff,
+                        models.PurchaseOrder.updated_at >= cutoff
+                    )
                 ).all()
                 po_ids = [po.sellercloud_po_id for po in recent_pos if po.sellercloud_po_id]
             
