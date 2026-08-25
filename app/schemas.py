@@ -672,6 +672,10 @@ class WarehouseOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+class BulkPOWarehouseUpdate(BaseModel):
+    po_ids: List[str] = Field(..., description="List of PO UUIDs or SellerCloud PO IDs (as strings)")
+    warehouse_id: str = Field(..., description="UUID of the new warehouse")
+
 class PurchaseOrderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
