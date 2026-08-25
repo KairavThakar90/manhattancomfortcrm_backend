@@ -69,7 +69,14 @@ def generate_human_readable_message(action: str, entity_type: str, entity_id: st
         changes = details.get("changes", [])
         if changes:
             change_strs = []
-            for c in changes:
+            
+            # Handle both list of dicts and dict of dicts
+            if isinstance(changes, dict):
+                items_to_iterate = [{"field": k, "old": v.get("old"), "new": v.get("new")} for k, v in changes.items()]
+            else:
+                items_to_iterate = changes
+                
+            for c in items_to_iterate:
                 field_name = c.get("field", "")
                 old_val = _clean_val_for_display(c.get("old"), field_name)
                 new_val = _clean_val_for_display(c.get("new"), field_name)

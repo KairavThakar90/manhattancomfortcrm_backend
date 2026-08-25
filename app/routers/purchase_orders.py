@@ -358,6 +358,7 @@ def list_purchase_orders(
     channel_order_id: Optional[str] = Query(None, description="Filter by explicit Channel Order ID (e.g. 'Schuchman')"),
     sellercloud_warehouse_id: Optional[str] = Query(None, description="Filter by Warehouse UUID or integer ID"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
+    approved_status: Optional[str] = Query(None, description="Filter by approved status (ontime, pending, delayed)"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -485,31 +486,60 @@ def list_purchase_orders(
             
         q = q.filter(or_(*search_conditions))
         
+    if approved_status:
+        cutoff_10_days = datetime.utcnow() - timedelta(days=10)
+        status_val = approved_status.strip().lower()
+        if status_val == "ontime":
+            q = q.filter(models.PurchaseOrder.invoice_date.isnot(None))
+        elif status_val == "delayed":
+            q = q.filter(
+                and_(
+                    models.PurchaseOrder.invoice_date.is_(None),
+                    models.PurchaseOrder.created_on < cutoff_10_days
+                )
+            )
+        elif status_val == "pending":
+            q = q.filter(
+                and_(
+                    models.PurchaseOrder.invoice_date.is_(None),
+                    or_(
+                        models.PurchaseOrder.created_on >= cutoff_10_days,
+                        models.PurchaseOrder.created_on.is_(None)
+                    )
+                )
+            )
+            
     if date_from:
         try:
-            import dateutil.parser
-            parsed_date_from = dateutil.parser.parse(date_from)
+            from datetime import datetime as dt, timezone
+            if len(date_from) == 7 and date_from[4] == '-':
+                parsed_date_from = dt(int(date_from[:4]), int(date_from[5:7]), 1, tzinfo=timezone.utc)
+            else:
+                parsed_date_from = dt.fromisoformat(date_from.replace("Z", "+00:00"))
+                if parsed_date_from.tzinfo is None:
+                    parsed_date_from = parsed_date_from.replace(tzinfo=timezone.utc)
             q = q.filter(models.PurchaseOrder.date_ordered >= parsed_date_from)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Exception in date_from: {e}")
 
     if date_to:
         try:
-            import dateutil.parser
             import calendar
-            from datetime import time, datetime as dt
+            from datetime import time, datetime as dt, timezone
             if len(date_to) == 7 and date_to[4] == '-':
                 year = int(date_to[:4])
                 month = int(date_to[5:7])
                 last_day = calendar.monthrange(year, month)[1]
-                parsed_date_to = dt(year, month, last_day, 23, 59, 59, 999999)
+                parsed_date_to = dt(year, month, last_day, 23, 59, 59, 999999, tzinfo=timezone.utc)
             else:
-                parsed_date_to = dateutil.parser.parse(date_to)
+                parsed_date_to = dt.fromisoformat(date_to.replace("Z", "+00:00"))
+                if parsed_date_to.tzinfo is None:
+                    parsed_date_to = parsed_date_to.replace(tzinfo=timezone.utc)
                 if parsed_date_to.time() == time.min:
-                    parsed_date_to = dt.combine(parsed_date_to.date(), time(23, 59, 59, 999999))
+                    parsed_date_to = dt.combine(parsed_date_to.date(), time(23, 59, 59, 999999)).replace(tzinfo=timezone.utc)
             q = q.filter(models.PurchaseOrder.date_ordered <= parsed_date_to)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Exception in date_to: {e}")
 
     # Apply sorting
     from sqlalchemy import case

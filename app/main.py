@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
-from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses, activities, cron, channels
+from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses, activities, cron, channels, logistics
 from app.middleware.activity_logger import ActivityLoggingMiddleware
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
@@ -74,6 +74,7 @@ app.include_router(warehouses.router)
 app.include_router(activities.router, prefix="/api/v1")
 app.include_router(cron.router, prefix="/api/v1")
 app.include_router(channels.router)
+app.include_router(logistics.router, prefix="/api/v1")
 
 
 @app.get("/health")

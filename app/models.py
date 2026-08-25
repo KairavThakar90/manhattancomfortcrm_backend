@@ -297,6 +297,18 @@ class PurchaseOrderItem(Base):
     comments = relationship("PurchaseOrderItemComment", back_populates="item", cascade="all, delete-orphan")
 
 
+class LogisticsCompany(Base):
+    __tablename__ = "logistics_companies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), unique=True, index=True, nullable=False)
+    primary_email = Column(String(255))
+    cc_email = Column(String(255))
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    containers = relationship("ShippingContainer", back_populates="logistics_company")
+
+
 class ShippingContainer(Base):
     __tablename__ = "shipping_containers"
 
@@ -306,6 +318,7 @@ class ShippingContainer(Base):
     estimated_arrival_date = Column(DateTime(timezone=True))  # ETA from SellerCloud
     received_date = Column(DateTime(timezone=True))  # Actual received date from SellerCloud
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"))
+    logistics_company_id = Column(UUID(as_uuid=True), ForeignKey("logistics_companies.id", ondelete="SET NULL"))
     
     # Lifecycle Management Fields
     date_dropped_off = Column(DateTime(timezone=True))
@@ -322,6 +335,7 @@ class ShippingContainer(Base):
     factory_credit_needed = Column(Text)
     trucker_email = Column(String(255))
     last_notified_trucker_email = Column(String(255))
+    trucking_company = Column(String(255))
 
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -329,6 +343,7 @@ class ShippingContainer(Base):
 
     item_links = relationship("PurchaseOrderItemContainer", back_populates="container", cascade="all, delete-orphan")
     warehouse = relationship("Warehouse", back_populates="containers")
+    logistics_company = relationship("LogisticsCompany", back_populates="containers")
     attachments = relationship("ShippingContainerAttachment", back_populates="container", cascade="all, delete-orphan")
     tracking = relationship("ShippingContainerTracking", back_populates="container", uselist=False, cascade="all, delete-orphan")
 

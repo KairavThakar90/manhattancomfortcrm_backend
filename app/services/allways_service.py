@@ -147,6 +147,7 @@ def track_container(container_number: str, session: Optional[requests.Session] =
         result["origin_port"] = shipment_raw.get("port_of_lading")
         result["destination_port"] = shipment_raw.get("port_of_destination")
         result["carrier"] = shipment_raw.get("carrier")
+        result["trucking_carrier"] = shipment_raw.get("trucking_carrier")
         result["vessel_and_voyage"] = shipment_raw.get("vessel_and_voyage_number")
         result["etd"] = parse_date(shipment_raw.get("etd"))
         result["eta"] = parse_date(shipment_raw.get("eta"))
@@ -265,6 +266,24 @@ def sync_container_tracking(
             
     if tracking_data.get("eta"):
         container.estimated_arrival_date = tracking_data["eta"]
+        
+    if tracking_data.get("trucking_carrier"):
+        trucker_name = tracking_data["trucking_carrier"]
+        container.trucking_company = trucker_name
+        
+        # Auto-create logistics company if it doesn't exist
+        log_co = db.query(models.LogisticsCompany).filter(models.LogisticsCompany.name == trucker_name).first()
+        if not log_co:
+            log_co = models.LogisticsCompany(name=trucker_name)
+            db.add(log_co)
+            db.commit()
+            db.refresh(log_co)
+            
+        container.logistics_company_id = log_co.id
+        
+        # Automatically pull the primary email down to the container if we have it
+        if log_co.primary_email and not container.trucker_email:
+            container.trucker_email = log_co.primary_email
         
     if tracking_data.get("picked_up"):
         container.date_dropped_off = tracking_data["picked_up"]

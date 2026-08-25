@@ -897,15 +897,6 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                     warehouse_sc_id = details_section.get("ReceivingWarehouseID") or details_section.get("ReceiveWarehouseID")
                     warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
 
-                    estimated_arrival_date = None
-                    eta_raw = details_section.get("EstimatedArrivalDate")
-                    if eta_raw:
-                        try:
-                            raw_dt = datetime.fromisoformat(eta_raw.replace("Z", ""))
-                            estimated_arrival_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-                        except ValueError:
-                            pass
-                    
                     received_date = None
                     recv_raw = details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate")
                     if recv_raw:
@@ -918,7 +909,6 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                     container_fields = dict(
                         sellercloud_container_id=container_sc_id,
                         container_name=details_section.get("ContainerName"),
-                        estimated_arrival_date=estimated_arrival_date,
                         received_date=received_date,
                         warehouse_id=warehouse.id if warehouse else None,
                         raw_json=detail,
