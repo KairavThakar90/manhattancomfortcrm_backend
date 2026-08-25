@@ -639,11 +639,17 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
                 .first()
             )
 
+        raw_image_url = li.get("ImageURL")
+        image_url = None
+        if raw_image_url:
+            image_url = f"https://cd.cwa.sellercloud.com{raw_image_url}" if raw_image_url.startswith("/") else raw_image_url
+
         fields = dict(
             purchase_order_id=po_row_id,
             sellercloud_item_id=sc_item_id,
             sku=li.get("ProductID") or li.get("SKU"),
             product_name=li.get("ProductName"),
+            image_url=image_url,
             qty_ordered=li.get("QtyOrdered", 0),
             qty_received=li.get("QtyReceived", 0),
             # Only overwrite qty_in_container from SC if SC reports > 0.

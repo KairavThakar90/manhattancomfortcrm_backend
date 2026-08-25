@@ -279,6 +279,7 @@ class PurchaseOrderItem(Base):
     sellercloud_item_id = Column(Integer)
     sku = Column(String(120))
     product_name = Column(String(255))
+    image_url = Column(String(500))
     qty_ordered = Column(Integer, default=0)
     qty_received = Column(Integer, default=0)
     qty_in_container = Column(Integer, default=0)

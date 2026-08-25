@@ -61,10 +61,8 @@ def list_containers(
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
-    receive_date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
-    receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
-    eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
-    eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
+    date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
+    date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
     sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
@@ -143,36 +141,14 @@ def list_containers(
         query = query.filter(models.ShippingContainer.id.in_(po_query))
 
     # Filter by received date range
-    if receive_date_from:
-        if receive_date_from.tzinfo is None:
-            from datetime import timezone
-            receive_date_from = receive_date_from.replace(tzinfo=timezone.utc)
-        query = query.filter(models.ShippingContainer.received_date >= receive_date_from)
-        
-    if receive_date_to:
-        if receive_date_to.time() == datetime.min.time():
-            from datetime import time, timezone
-            receive_date_to = datetime.combine(receive_date_to.date(), time(23, 59, 59, 999999)).replace(tzinfo=timezone.utc)
-        elif receive_date_to.tzinfo is None:
-            from datetime import timezone
-            receive_date_to = receive_date_to.replace(tzinfo=timezone.utc)
-        query = query.filter(models.ShippingContainer.received_date <= receive_date_to)
-
-    # Filter by ETA date range
-    if eta_from:
-        if eta_from.tzinfo is None:
-            from datetime import timezone
-            eta_from = eta_from.replace(tzinfo=timezone.utc)
-        query = query.filter(models.ShippingContainer.estimated_arrival_date >= eta_from)
-        
-    if eta_to:
-        if eta_to.time() == datetime.min.time():
-            from datetime import time, timezone
-            eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999)).replace(tzinfo=timezone.utc)
-        elif eta_to.tzinfo is None:
-            from datetime import timezone
-            eta_to = eta_to.replace(tzinfo=timezone.utc)
-        query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
+    if date_from:
+        query = query.filter(models.ShippingContainer.received_date >= date_from)
+    if date_to:
+        # If date_to has no time component (midnight), extend it to the end of the day
+        if date_to.time() == datetime.min.time():
+            from datetime import time
+            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.received_date <= date_to)
 
     if sort_by == "eta_delivery":
         sort_col = models.ShippingContainer.estimated_arrival_date
@@ -228,12 +204,8 @@ def list_containers(
                 door=ctr.door,
                 date_emptied=ctr.date_emptied,
                 unloaded_by=ctr.unloaded_by,
-                trucking_company=ctr.trucking_company,
-                logistics_company_id=ctr.logistics_company_id,
-                logistics_company=schemas.LogisticsCompanyOut.from_orm(ctr.logistics_company) if getattr(ctr, 'logistics_company', None) else None,
                 unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
-                container_shipping_cost=float(ctr.container_shipping_cost) if ctr.container_shipping_cost is not None else None,
-                drayage_cost=float(ctr.drayage_cost) if ctr.drayage_cost is not None else None,
+                container_cost_drayage=float(ctr.drayage_cost) if ctr.drayage_cost is not None else None,
                 customs_duty_misc=float(ctr.customs_duty_misc) if ctr.customs_duty_misc is not None else None,
                 per_diem=float(ctr.per_diem) if ctr.per_diem is not None else None,
                 country_of_origin=ctr.country_of_origin,
@@ -334,6 +306,7 @@ def get_po_items_for_container(
                 sellercloud_po_id=po.sellercloud_po_id,
                 sku=item.sku,
                 product_name=item.product_name,
+                image_url=item.image_url,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
                 qty_remaining=qty_available,
@@ -567,7 +540,7 @@ def create_container(
         date_emptied=container_data.date_emptied,
         unloaded_by=container_data.unloaded_by,
         unload_cost=container_data.unload_cost,
-        drayage_cost=container_data.drayage_cost,
+        drayage_cost=container_data.container_cost_drayage,
         customs_duty_misc=container_data.customs_duty_misc,
         per_diem=container_data.per_diem,
         country_of_origin=container_data.country_of_origin,
@@ -708,7 +681,7 @@ async def update_container(
     update_dict = update_data.model_dump(exclude_unset=True)
     lifecycle_fields = [
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
-        "unload_cost", "container_shipping_cost", "drayage_cost", "customs_duty_misc", 
+        "unload_cost", "drayage_cost", "customs_duty_misc", 
         "per_diem", "country_of_origin", "receiving_closure_notes", 
         "factory_credit_needed", "trucker_email"
     ]
@@ -1123,6 +1096,7 @@ def get_container_details(
                 vendor_name=po.vendor.name if (po and po.vendor) else None,
                 sku=item.sku,
                 product_name=item.product_name,
+                image_url=item.image_url,
                 qty_in_container=link.qty_in_container or 0,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
@@ -1157,8 +1131,7 @@ def get_container_details(
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
-        container_shipping_cost=float(container.container_shipping_cost) if container.container_shipping_cost is not None else None,
-        drayage_cost=float(container.drayage_cost) if container.drayage_cost is not None else None,
+        container_cost_drayage=float(container.drayage_cost) if container.drayage_cost is not None else None,
         customs_duty_misc=float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
         per_diem=float(container.per_diem) if container.per_diem is not None else None,
         country_of_origin=container.country_of_origin,
@@ -2098,211 +2071,101 @@ def validate_container_items_bulk(
         "data": results
     }
 
-@router.post("/import-csv")
-async def import_containers_csv(
-    file: UploadFile = File(...),
-    region: str = Form("california"),
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+@router.get("/allways/search/{container_number}")
+def search_container_allways(
+    container_number: str,
+    db: Session = Depends(get_db)
 ):
     """
-    Import containers via CSV using strict validation.
-    Region must be 'california' or 'southern' to match column layouts.
+    Search AllWays API for tracking information for a specific container.
     """
-    import csv
-    import io
-    from app.services.import_service import parse_cost_v2, check_date_v2, parse_date
-    
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Must be a CSV file")
-        
-    content = await file.read()
+    from app.services.allways_service import track_container
     try:
-        content_str = content.decode('utf-8-sig')
-    except:
-        content_str = content.decode('latin-1')
+        result = track_container(container_number)
+        if result.get("error_message") and not result.get("raw_response"):
+            raise HTTPException(status_code=404, detail=result["error_message"])
+            
+        # Add warehouse info based on AllWays destination port
+        result["warehouse_id"] = None
+        result["warehouse_name"] = None
         
-    reader = csv.reader(io.StringIO(content_str.strip()))
+        dest_str = result.get("destination_port", "")
+        warehouse_name_query = None
+        
+        if dest_str:
+            dest_str_upper = dest_str.upper()
+            if "NEW YORK" in dest_str_upper or " NY" in dest_str_upper or dest_str_upper == "NY":
+                warehouse_name_query = "South Brunswick"
+            elif "LOS ANGELES" in dest_str_upper or " CA" in dest_str_upper or dest_str_upper == "CA":
+                warehouse_name_query = "California"
+                
+        if warehouse_name_query:
+            warehouse = db.query(models.Warehouse).filter(
+                models.Warehouse.name.ilike(f"%{warehouse_name_query}%")
+            ).first()
+            if warehouse:
+                result["warehouse_id"] = str(warehouse.id)
+                result["warehouse_name"] = warehouse.name
+                
+        # Fallback to existing container in DB if AllWays didn't have a mapped port
+        if not result["warehouse_id"]:
+            container = db.query(models.ShippingContainer).filter(models.ShippingContainer.container_name == container_number).first()
+            if container and container.warehouse_id:
+                result["warehouse_id"] = str(container.warehouse_id)
+                if container.warehouse:
+                    result["warehouse_name"] = container.warehouse.name
+                
+        # Remove raw_response to avoid cluttering the payload
+        result.pop("raw_response", None)
+        return {"success": True, "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{container_id}/tracking/sync")
+def sync_single_container_tracking(
+    container_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Sync tracking information for a single container with AllWays API.
+    Accepts either the internal UUID or the container number (e.g., TLLU5203239).
+    """
+    import uuid
+    container = None
     try:
-        header = next(reader)
-    except StopIteration:
-        raise HTTPException(status_code=400, detail="CSV file is empty")
+        # Try to parse as UUID
+        val = uuid.UUID(container_id)
+        container = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == val).first()
+    except ValueError:
+        # Fallback to searching by container_name (container number)
+        container = db.query(models.ShippingContainer).filter(models.ShippingContainer.container_name == container_id).first()
+
+    if not container:
+        raise HTTPException(status_code=404, detail=f"Container '{container_id}' not found in database")
         
-    is_cali = region.lower() == "california"
-    
-    updates = 0
-    issues = []
-    
-    for row_idx, row in enumerate(reader, start=2):
-        if not any(row):
-            continue
-            
-        try:
-            # Pad row
-            while len(row) < 16:
-                row.append("")
-                
-            if is_cali:
-                date_dropped_off_raw = row[0]
-                door = row[1].strip()
-                container_name_csv = row[2].strip()
-                cid = row[3].strip()
-                date_emptied = parse_date(row[5])
-                unloaded_by = row[6].strip().upper() if row[6] else None
-                unload_cost_raw = row[7]
-                container_cost_raw = row[8]
-                drayage_cost_raw = row[9]
-                customs_cost_raw = row[10]
-                per_diem_raw = row[11]
-                receiving_notes = row[13].strip() if row[13] else ""
-                factory_credit = row[14].strip() if row[14] else ""
-                notes = row[15].strip() if row[15] else ""
-                
-                if notes:
-                    if receiving_notes:
-                        receiving_notes += f"\\nNOTES: {notes}"
-                    else:
-                        receiving_notes = f"NOTES: {notes}"
-            else:
-                date_dropped_off_raw = row[0]
-                door = row[1].strip()
-                container_name_csv = row[2].strip()
-                cid = row[3].strip()
-                date_emptied = parse_date(row[4])
-                unloaded_by = row[5].strip().upper() if row[5] else None
-                unload_cost_raw = row[6]
-                container_cost_raw = row[7]
-                drayage_cost_raw = row[8]
-                customs_cost_raw = row[9]
-                per_diem_raw = row[10]
-                receiving_notes = row[12].strip() if row[12] else ""
-                factory_credit = row[13].strip() if row[13] else ""
-                notes = ""
-                
-            if not cid.isdigit():
-                # Silently skip rows without a valid Container ID number
-                continue
-                
-            container = db.query(models.ShippingContainer).filter(models.ShippingContainer.sellercloud_container_id == int(cid)).first()
-            if not container:
-                # Silently skip containers not found in the database
-                continue
-                
-            if container.container_name != container_name_csv:
-                issues.append({"row": row, "reason": f"Name mismatch (CSV: {container_name_csv}, DB: {container.container_name})"})
-                continue
-                
-            date_issue = check_date_v2(date_dropped_off_raw)
-            if date_issue:
-                issues.append({"row": row, "reason": date_issue})
-                continue
-                
-            # Check costs
-            cost_issue = None
-            unload_cost, err = parse_cost_v2(unload_cost_raw)
-            if err: cost_issue = err
-            container_cost, err = parse_cost_v2(container_cost_raw)
-            if err: cost_issue = err
-            drayage_cost, err = parse_cost_v2(drayage_cost_raw)
-            if err: cost_issue = err
-            customs_cost, err = parse_cost_v2(customs_cost_raw)
-            if err: cost_issue = err
-            per_diem, err = parse_cost_v2(per_diem_raw)
-            if err: cost_issue = err
-            
-            if cost_issue:
-                issues.append({"row": row, "reason": cost_issue})
-                continue
-                
-            changes = {}
-            def track_change(field_name, new_val):
-                old_val = getattr(container, field_name)
-                
-                import decimal
-                if isinstance(old_val, (int, float, decimal.Decimal)) and isinstance(new_val, (int, float, decimal.Decimal)):
-                    try:
-                        if float(old_val) == float(new_val):
-                            return
-                    except:
-                        pass
-                
-                str_old = str(old_val).strip() if old_val is not None else ""
-                str_new = str(new_val).strip() if new_val is not None else ""
-                
-                # Clean date strings for comparison (e.g., "2026-04-06 00:00:00+05:30" -> "2026-04-06")
-                if len(str_old) >= 10 and " " in str_old and "-" in str_old[:10]:
-                    str_old = str_old.split(" ")[0]
-                
-                # Compare the stringified representations to avoid Float vs Decimal mismatches
-                if str_old != str_new:
-                    changes[field_name] = {
-                        "old": str_old if str_old else None, 
-                        "new": str_new if str_new else None
-                    }
-                    setattr(container, field_name, new_val)
-                    
-            track_change('door', door)
-            track_change('date_emptied', date_emptied)
-            track_change('unloaded_by', unloaded_by)
-            if unload_cost is not None: track_change('unload_cost', unload_cost)
-            if container_cost is not None: track_change('container_shipping_cost', container_cost)
-            if drayage_cost is not None: track_change('drayage_cost', drayage_cost)
-            if customs_cost is not None: track_change('customs_duty_misc', customs_cost)
-            if per_diem is not None: track_change('per_diem', per_diem)
-            track_change('receiving_closure_notes', receiving_notes)
-            track_change('factory_credit_needed', factory_credit)
-            
-            if changes:
-                db.commit()
-                log_activity(
-                    db=db,
-                    action="UPDATE_CONTAINER",
-                    user_id=current_user.id,
-                    entity_type="CONTAINER",
-                    entity_id=str(container.id),
-                    details={"changes": changes, "container_name": container.container_name, "source": "CSV Import"}
-                )
-                db.commit()
-                updates += 1
-                
-        except Exception as e:
-            db.rollback()
-            issues.append({"row": row, "reason": f"Unexpected script error: {str(e)}"})
-            
-    if issues:
-        output = io.StringIO()
-        writer = csv.writer(output)
+    if not container.container_name:
+        raise HTTPException(status_code=400, detail="Container has no container number assigned")
         
-        # Add the 'Issue Reason' to the header
-        header.append("Issue Reason")
-        writer.writerow(header)
+    from app.services.allways_service import sync_container_tracking
+    try:
+        tracking = sync_container_tracking(db, container)
+        if tracking.error_message and not tracking.origin_port and not tracking.latitude:
+            return {"success": False, "message": f"Sync failed: {tracking.error_message}"}
         
-        for issue in issues:
-            bad_row = issue["row"]
-            reason = issue["reason"]
-            # Pad or trim row to match header minus the reason column
-            while len(bad_row) < len(header) - 1:
-                bad_row.append("")
-            # In case bad_row is longer than expected
-            bad_row = bad_row[:len(header) - 1]
-            bad_row.append(reason)
-            writer.writerow(bad_row)
-            
-        from fastapi.responses import Response
-        return Response(
-            content=output.getvalue(), 
-            media_type="text/csv", 
-            headers={
-                "Content-Disposition": "attachment; filename=import_issues.csv", 
-                "X-Successful-Updates": str(updates)
-            }
-        )
-            
-    return {
-        "message": "CSV import complete. No issues found.",
-        "updates": updates,
-        "issues_count": 0
-    }
+        # Prepare tracking info for response
+        tracking_info = {
+            "status": tracking.status, 
+            "eta": tracking.eta.isoformat() if tracking.eta else None,
+            "etd": tracking.etd.isoformat() if tracking.etd else None,
+            "carrier": tracking.carrier,
+            "origin_port": tracking.origin_port,
+            "destination_port": tracking.destination_port
+        }
+        return {"success": True, "message": "Container tracking synced successfully", "data": tracking_info}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/tracking/sync-all")
 def trigger_allways_sync_all(background_tasks: BackgroundTasks):

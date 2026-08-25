@@ -11,7 +11,7 @@ from sqlalchemy import and_, or_, cast, String
 
 from app.database import get_db
 from app.auth import get_current_user
-from app import models
+from app import models, schemas
 from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
 from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers
@@ -1383,6 +1383,7 @@ def get_filtered_pos(
     vendor_id: Optional[str] = Query(None, description="Filter by vendor UUID"),
     customer_id: Optional[str] = Query(None, description="Filter by customer UUID or SC ID"),
     channel_id: Optional[str] = Query(None, description="Filter by channel UUID"),
+    channel_order_id: Optional[str] = Query(None, description="Filter by channel order ID"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1452,6 +1453,9 @@ def get_filtered_pos(
                 base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(channel_id))
             except ValueError:
                 base_q = base_q.filter(models.PurchaseOrder.id == uuid.uuid4())
+                
+        if channel_order_id:
+            base_q = base_q.filter(models.PurchaseOrder.channel_order_id == channel_order_id)
         
         # Helper function to create response object
         def create_category_response(data_list, total):
@@ -1557,6 +1561,9 @@ def get_filtered_pos(
             )
         else:
             q = q.filter(models.PurchaseOrder.customer_id == customer_id)
+            
+    if channel_order_id:
+        q = q.filter(models.PurchaseOrder.channel_order_id == channel_order_id)
     
     # Apply filter type
     if filter_type == "new_without_invoice":
@@ -2192,6 +2199,154 @@ def update_po_lead_time(
         "po_id": str(po.id),
         "sellercloud_po_id": po.sellercloud_po_id,
         "container_lead_time_days": po.container_lead_time_days
+    }
+
+
+@router.patch("/bulk/warehouse")
+def update_bulk_po_warehouse(
+    data: schemas.BulkPOWarehouseUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Update receiving warehouse for multiple purchase orders in both local DB and SellerCloud.
+    """
+    if current_user.role == "vendor":
+        raise HTTPException(status_code=403, detail="Vendors cannot update warehouse")
+
+    try:
+        import uuid
+        w_uuid = uuid.UUID(data.warehouse_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid warehouse_id format (must be UUID)")
+        
+    warehouse = db.query(models.Warehouse).filter(models.Warehouse.id == w_uuid).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail=f"Warehouse '{data.warehouse_id}' not found")
+        
+    if not warehouse.sellercloud_warehouse_id:
+        raise HTTPException(status_code=400, detail="Warehouse must have a SellerCloud ID to sync")
+
+    from app.services.sellercloud_client import sellercloud_client
+    
+    updated_pos = []
+    failed_pos = []
+
+    for po_id in data.po_ids:
+        po = None
+        # Try to parse as integer (sellercloud_po_id)
+        try:
+            sc_po_id = int(po_id)
+            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id).first()
+        except ValueError:
+            # Not an integer, lookup by UUID
+            try:
+                po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == uuid.UUID(po_id)).first()
+            except Exception:
+                pass
+                
+        if not po or not po.sellercloud_po_id:
+            failed_pos.append({"po_id": po_id, "reason": "Not found or missing SC ID"})
+            continue
+
+        try:
+            success = sellercloud_client.update_purchase_order_warehouse(po.sellercloud_po_id, warehouse.sellercloud_warehouse_id)
+            if success:
+                old_warehouse_id = str(po.warehouse_id) if po.warehouse_id else None
+                po.warehouse_id = warehouse.id
+                
+                changes = [{"field": "warehouse_id", "old": old_warehouse_id, "new": str(warehouse.id)}]
+                log_activity(db, action="UPDATE_PO_WAREHOUSE", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes, "warehouse_name": warehouse.name})
+                updated_pos.append(po_id)
+            else:
+                failed_pos.append({"po_id": po_id, "reason": "SC API rejected update"})
+        except Exception as e:
+            failed_pos.append({"po_id": po_id, "reason": str(e)})
+
+    db.commit()
+
+    return {
+        "success": True, 
+        "message": f"Successfully updated {len(updated_pos)} POs",
+        "updated_pos": updated_pos,
+        "failed_pos": failed_pos,
+        "warehouse_id": str(warehouse.id),
+        "warehouse_name": warehouse.name
+    }
+
+
+@router.patch("/{po_id}/warehouse")
+def update_po_warehouse(
+    po_id: str,
+    warehouse_id: str = Query(..., description="UUID of the warehouse"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Update receiving warehouse for a specific purchase order in both local DB and SellerCloud.
+    
+    Accepts PO UUID string or SellerCloud PO ID integer (like 11880).
+    """
+    if current_user.role == "vendor":
+        raise HTTPException(status_code=403, detail="Vendors cannot update warehouse")
+
+    po = None
+    # Try to parse as integer (sellercloud_po_id)
+    try:
+        sc_po_id = int(po_id)
+        po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id).first()
+    except ValueError:
+        # Not an integer, lookup by UUID
+        try:
+            import uuid
+            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == uuid.UUID(po_id)).first()
+        except Exception:
+            pass
+            
+    if not po:
+        raise HTTPException(status_code=404, detail=f"Purchase order '{po_id}' not found")
+        
+    if not po.sellercloud_po_id:
+        raise HTTPException(status_code=400, detail="Cannot update warehouse for PO without SellerCloud ID")
+        
+    try:
+        import uuid
+        w_uuid = uuid.UUID(warehouse_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid warehouse_id format (must be UUID)")
+        
+    warehouse = db.query(models.Warehouse).filter(models.Warehouse.id == w_uuid).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail=f"Warehouse '{warehouse_id}' not found")
+        
+    if not warehouse.sellercloud_warehouse_id:
+        raise HTTPException(status_code=400, detail="Warehouse must have a SellerCloud ID to sync")
+        
+    # Update in SellerCloud
+    from app.services.sellercloud_client import sellercloud_client
+    try:
+        success = sellercloud_client.update_purchase_order_warehouse(po.sellercloud_po_id, warehouse.sellercloud_warehouse_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update warehouse in SellerCloud")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SellerCloud API error: {str(e)}")
+        
+    # Update locally
+    old_warehouse_id = str(po.warehouse_id) if po.warehouse_id else None
+    
+    po.warehouse_id = warehouse.id
+    db.commit()
+    db.refresh(po)
+    
+    changes = [{"field": "warehouse_id", "old": old_warehouse_id, "new": str(warehouse.id)}]
+    log_activity(db, action="UPDATE_PO_WAREHOUSE", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes, "warehouse_name": warehouse.name})
+    
+    return {
+        "success": True, 
+        "message": "Warehouse updated successfully",
+        "po_id": str(po.id),
+        "warehouse_id": str(warehouse.id),
+        "warehouse_name": warehouse.name
     }
 
 
