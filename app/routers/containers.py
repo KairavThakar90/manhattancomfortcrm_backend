@@ -540,7 +540,7 @@ def create_container(
         date_emptied=container_data.date_emptied,
         unloaded_by=container_data.unloaded_by,
         unload_cost=container_data.unload_cost,
-        drayage_cost=container_data.container_cost_drayage,
+        drayage_cost=container_data.drayage_cost,
         customs_duty_misc=container_data.customs_duty_misc,
         per_diem=container_data.per_diem,
         country_of_origin=container_data.country_of_origin,
