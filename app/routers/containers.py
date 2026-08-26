@@ -63,6 +63,10 @@ def list_containers(
     sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
     date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    receive_date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date (alias for date_from)"),
+    receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date (alias for date_to)"),
+    eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
+    eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
     sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
@@ -140,15 +144,28 @@ def list_containers(
             
         query = query.filter(models.ShippingContainer.id.in_(po_query))
 
-    # Filter by received date range
-    if date_from:
-        query = query.filter(models.ShippingContainer.received_date >= date_from)
-    if date_to:
-        # If date_to has no time component (midnight), extend it to the end of the day
-        if date_to.time() == datetime.min.time():
+    # Filter by received date range (supports both date_from/date_to and receive_date_from/receive_date_to)
+    effective_date_from = date_from or receive_date_from
+    effective_date_to = date_to or receive_date_to
+
+    if effective_date_from:
+        query = query.filter(models.ShippingContainer.received_date >= effective_date_from)
+    if effective_date_to:
+        # If effective_date_to has no time component (midnight), extend it to the end of the day
+        if effective_date_to.time() == datetime.min.time():
             from datetime import time
-            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
-        query = query.filter(models.ShippingContainer.received_date <= date_to)
+            effective_date_to = datetime.combine(effective_date_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.received_date <= effective_date_to)
+
+    # Filter by ETA date range
+    if eta_from:
+        query = query.filter(models.ShippingContainer.estimated_arrival_date >= eta_from)
+    if eta_to:
+        # If eta_to has no time component (midnight), extend it to the end of the day
+        if eta_to.time() == datetime.min.time():
+            from datetime import time
+            eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
 
     if sort_by == "eta_delivery":
         sort_col = models.ShippingContainer.estimated_arrival_date
