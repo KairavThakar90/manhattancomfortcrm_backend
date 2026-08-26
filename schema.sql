@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
     sellercloud_item_id     INTEGER,               -- SellerCloud Items[].ID (a.k.a. "POItemID")
     sku                    VARCHAR(120),
     product_name            VARCHAR(255),
+    image_url               VARCHAR(500),
     qty_ordered               INTEGER DEFAULT 0,   -- SellerCloud "QtyOrdered"
     qty_received              INTEGER DEFAULT 0,   -- SellerCloud "QtyReceived"
     qty_in_container          INTEGER DEFAULT 0,   -- SellerCloud "QtyInContainer" - only present on the full PO detail call, not the list view

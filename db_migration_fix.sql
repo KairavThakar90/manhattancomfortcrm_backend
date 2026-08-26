@@ -198,3 +198,8 @@ END $$;
 
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS container_shipping_cost NUMERIC(14,2);
 ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS drayage_cost NUMERIC(14,2);
+
+-- ---------------------------------------------------------------------
+-- purchase_order_items: add image_url (commit 3ba58ed)
+-- ---------------------------------------------------------------------
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS image_url VARCHAR(500);
