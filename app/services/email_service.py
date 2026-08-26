@@ -484,3 +484,101 @@ async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: 
         await fm.send_message(message)
     except Exception as e:
         logger.error(f"Failed to send weekly digest: {e}")
+
+
+async def send_container_lifecycle_tag_notification(
+    emails: list[str],
+    commenter_name: str,
+    link: str,
+    field_name: str,  # "Vendor Credit Needed" or "Receiving Closure Notes"
+    field_value: str,
+    container_name: str,
+    estimated_arrival_date: str = None,
+    received_date: str = None,
+    door: str = None,
+    unloaded_by: str = None,
+    country_of_origin: str = None,
+    warehouse_name: str = None
+):
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        logger.warning("SMTP credentials not configured. Skipping email notification.")
+        return
+
+    subject = f"Manhattan Comfort Dashboard - Container {container_name} ({field_name})"
+
+    # Format fields
+    display_eta = estimated_arrival_date if estimated_arrival_date else "N/A"
+    display_received = received_date if received_date else "N/A"
+    display_door = door if door else "N/A"
+    display_unloaded = unloaded_by if unloaded_by else "N/A"
+    display_origin = country_of_origin if country_of_origin else "N/A"
+    display_warehouse = warehouse_name if warehouse_name else "N/A"
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px; color: #333;">
+        <h2 style="color: #007bff; margin-top: 0;">You were mentioned in Container {container_name}!</h2>
+        <p><strong>{commenter_name}</strong> has tagged you in the <strong>{field_name}</strong> section of container <strong>{container_name}</strong>.</p>
+        
+        <div style="background-color: #f9f9f9; padding: 15px; border-left: 4px solid #007bff; margin: 20px 0;">
+            <p style='margin: 0 0 10px 0;'><strong>Message:</strong></p>
+            <p style="white-space: pre-wrap; margin: 0; font-style: italic;">{field_value}</p>
+        </div>
+
+        <h3 style="color: #555; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 25px;">Container Details</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; width: 40%; border-bottom: 1px solid #eee;">Container Name</td>
+                <td style="padding: 6px 0; width: 60%; border-bottom: 1px solid #eee;">{container_name}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; border-bottom: 1px solid #eee;">Warehouse</td>
+                <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{display_warehouse}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; border-bottom: 1px solid #eee;">ETA Delivery</td>
+                <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{display_eta}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; border-bottom: 1px solid #eee;">Received Date</td>
+                <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{display_received}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; border-bottom: 1px solid #eee;">Door</td>
+                <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{display_door}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; border-bottom: 1px solid #eee;">Unloaded By</td>
+                <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{display_unloaded}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: bold; border-bottom: 1px solid #eee;">Country of Origin</td>
+                <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{display_origin}</td>
+            </tr>
+        </table>
+        
+        <p style="margin-top: 25px;">Click the button below to view it in the dashboard:</p>
+        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Container</a>
+        {EMAIL_SIGNATURE_HTML}
+    </div>
+    """
+
+    if not emails:
+        return
+
+    to_email = emails[0]
+    cc_list = emails[1:] if len(emails) > 1 else []
+
+    message = MessageSchema(
+        subject=subject,
+        recipients=[to_email],
+        cc=cc_list,
+        body=html,
+        subtype=MessageType.html
+    )
+    
+    try:
+        fm = FastMail(conf)
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send container lifecycle tag notification: {str(e)}")
+

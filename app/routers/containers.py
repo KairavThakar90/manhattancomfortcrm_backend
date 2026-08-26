@@ -631,6 +631,51 @@ def create_container(
     return response
 
 
+def parse_mentions(text: str, db: Session) -> list[models.User]:
+    if not text:
+        return []
+    
+    import re
+    # 1. Match email addresses first (e.g. @sanjay.storetransform@gmail.com)
+    email_matches = re.findall(r'@([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
+    
+    # 2. Match names (e.g. @Sanjay_Thakar or @Sanjay)
+    name_matches = re.findall(r'@([A-Za-z0-9_\-\.]+)', text)
+    
+    matched_user_ids = set()
+    
+    # Try to match emails
+    if email_matches:
+        users = db.query(models.User).filter(
+            models.User.email.in_(email_matches),
+            models.User.is_active == True,
+            models.User.email != "googlecloudcron@manhattancomfort.com"
+        ).all()
+        for u in users:
+            matched_user_ids.add(u.id)
+            
+    # Try to match names/usernames
+    if name_matches:
+        users = db.query(models.User).filter(
+            models.User.is_active == True,
+            models.User.email != "googlecloudcron@manhattancomfort.com"
+        ).all()
+        for match in name_matches:
+            match_clean = match.lower().replace("_", " ")
+            for u in users:
+                full_name = (u.full_name or "").lower()
+                first_name = (u.first_name or "").lower()
+                if full_name and match_clean in full_name:
+                    matched_user_ids.add(u.id)
+                elif first_name and match_clean in first_name:
+                    matched_user_ids.add(u.id)
+                    
+    if not matched_user_ids:
+        return []
+        
+    return db.query(models.User).filter(models.User.id.in_(list(matched_user_ids))).all()
+
+
 # ---------------------------------------------------------------------------
 # PUT /containers/{container_id}
 # ---------------------------------------------------------------------------
@@ -818,6 +863,65 @@ async def update_container(
             )
             container.last_notified_trucker_email = email_to
             db.commit()
+
+    # Tag / Mention Email Notifications for Vendor Credit Needed & Receiving Closure Notes
+    changed_fields = {change["field"] for change in changes}
+    
+    if "factory_credit_needed" in changed_fields and container.factory_credit_needed:
+        tagged_users = parse_mentions(container.factory_credit_needed, db)
+        if tagged_users:
+            from app.services.email_service import send_container_lifecycle_tag_notification
+            from app.config import settings
+            emails = [u.email for u in tagged_users if u.email]
+            if emails:
+                link = f"{settings.FRONTEND_ORIGIN}/containers/{container.id}"
+                formatted_eta = container.estimated_arrival_date.strftime('%Y-%m-%d') if container.estimated_arrival_date else None
+                formatted_received = container.received_date.strftime('%Y-%m-%d') if container.received_date else None
+                warehouse_name = container.warehouse.name if container.warehouse else None
+                
+                background_tasks.add_task(
+                    send_container_lifecycle_tag_notification,
+                    emails=emails,
+                    commenter_name=current_user.full_name or current_user.email,
+                    link=link,
+                    field_name="Vendor Credit Needed",
+                    field_value=container.factory_credit_needed,
+                    container_name=container.container_name,
+                    estimated_arrival_date=formatted_eta,
+                    received_date=formatted_received,
+                    door=container.door,
+                    unloaded_by=container.unloaded_by,
+                    country_of_origin=container.country_of_origin,
+                    warehouse_name=warehouse_name
+                )
+
+    if "receiving_closure_notes" in changed_fields and container.receiving_closure_notes:
+        tagged_users = parse_mentions(container.receiving_closure_notes, db)
+        if tagged_users:
+            from app.services.email_service import send_container_lifecycle_tag_notification
+            from app.config import settings
+            emails = [u.email for u in tagged_users if u.email]
+            if emails:
+                link = f"{settings.FRONTEND_ORIGIN}/containers/{container.id}"
+                formatted_eta = container.estimated_arrival_date.strftime('%Y-%m-%d') if container.estimated_arrival_date else None
+                formatted_received = container.received_date.strftime('%Y-%m-%d') if container.received_date else None
+                warehouse_name = container.warehouse.name if container.warehouse else None
+                
+                background_tasks.add_task(
+                    send_container_lifecycle_tag_notification,
+                    emails=emails,
+                    commenter_name=current_user.full_name or current_user.email,
+                    link=link,
+                    field_name="Receiving Closure Notes",
+                    field_value=container.receiving_closure_notes,
+                    container_name=container.container_name,
+                    estimated_arrival_date=formatted_eta,
+                    received_date=formatted_received,
+                    door=container.door,
+                    unloaded_by=container.unloaded_by,
+                    country_of_origin=container.country_of_origin,
+                    warehouse_name=warehouse_name
+                )
 
     details_payload = update_data.model_dump(mode='json', exclude_unset=True)
     if changes:
