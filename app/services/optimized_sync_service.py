@@ -76,6 +76,7 @@ class OptimizedSyncService:
             "items_synced": 0,
             "api_calls": 0
         }
+        synced_po_ids = []
         
         try:
             # Step 1: Fetch recently modified POs using SC's updatedDateFrom filter
@@ -197,12 +198,16 @@ class OptimizedSyncService:
                             setattr(existing_po, k, v)
                         po = existing_po
                         stats["pos_updated"] += 1
+                        if po.sellercloud_po_id not in synced_po_ids:
+                            synced_po_ids.append(po.sellercloud_po_id)
                     else:
                         # Create new
                         po = models.PurchaseOrder(**mapped)
                         self.db.add(po)
                         self.db.flush()
                         stats["pos_created"] += 1
+                        if po.sellercloud_po_id not in synced_po_ids:
+                            synced_po_ids.append(po.sellercloud_po_id)
                     
                     # Sync items
                     line_items = detail.get("Items") or []
@@ -224,6 +229,7 @@ class OptimizedSyncService:
             return {
                 "success": len(errors) == 0 or (stats["pos_created"] + stats["pos_updated"]) > 0,
                 "stats": stats,
+                "synced_po_ids": synced_po_ids,
                 "errors": errors,
                 "cutoff_date": cutoff_date.isoformat(),
                 "days_synced": days,
@@ -271,10 +277,10 @@ class OptimizedSyncService:
             "pos_skipped": 0,
             "containers_synced": 0,
             "links_synced": 0,
-            "links_synced": 0,
             "bandwidth_saved": "~80-95%",
             "stopped_early": False
         }
+        all_synced_container_names = []
         
         import time
         start_time = time.time()
@@ -331,6 +337,11 @@ class OptimizedSyncService:
                     stats["containers_synced"] += result.get("containers_synced", 0)
                     stats["links_synced"] += result.get("links_synced", 0)
                     
+                    names = result.get("synced_container_names") or []
+                    for name in names:
+                        if name not in all_synced_container_names:
+                            all_synced_container_names.append(name)
+                    
                     # Progress logging every 10 POs
                     if idx % 10 == 0:
                         print(f"[OptimizedSync] Progress: {idx}/{len(pos)} POs checked, "
@@ -351,6 +362,7 @@ class OptimizedSyncService:
             return {
                 "success": len(errors) == 0 or stats["pos_processed"] > 0,
                 "stats": stats,
+                "synced_container_names": all_synced_container_names,
                 "errors": errors,
                 "cutoff_date": cutoff.isoformat(),
                 "days_synced": days,

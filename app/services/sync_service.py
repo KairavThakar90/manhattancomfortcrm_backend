@@ -837,6 +837,7 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
     checked_pairs = set()
     containers_synced = 0
     links_synced = 0
+    synced_container_names = []
 
     try:
         for it in items:
@@ -927,6 +928,8 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                         db.add(container)
                         db.flush()
                     containers_synced += 1
+                    if container_fields.get("container_name"):
+                        synced_container_names.append(container_fields["container_name"])
 
                     results = ((detail.get("Items") or {}).get("Results")) or []
                     for entry in results:
@@ -988,7 +991,11 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
         _log_sync(db, "shipping_containers", "failed", containers_synced, str(e))
         raise
 
-    return {"containers_synced": containers_synced, "links_synced": links_synced}
+    return {
+        "containers_synced": containers_synced,
+        "links_synced": links_synced,
+        "synced_container_names": list(set(synced_container_names))
+    }
 
 
 def sync_containers_for_all_pos(db: Session, limit: int = None) -> dict:

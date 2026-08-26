@@ -2684,16 +2684,16 @@ def export_single_po_csv(
     writer.writerow(["Channel Order ID", po.channel_order_id or ""])
     writer.writerow(["Status Code", po.purchase_order_status_code or ""])
     writer.writerow(["Receiving Status", po.receiving_status_code or ""])
-    writer.writerow(["Created On", po.created_on.isoformat() if po.created_on else ""])
-    writer.writerow(["Date Ordered", po.date_ordered.isoformat() if po.date_ordered else ""])
-    writer.writerow(["Expected Delivery", po.expected_delivery_date.isoformat() if po.expected_delivery_date else ""])
-    writer.writerow(["Invoice Date", po.invoice_date.isoformat() if po.invoice_date else ""])
+    writer.writerow(["Created On", po.created_on.strftime('%Y-%m-%d') if po.created_on else ""])
+    writer.writerow(["Date Ordered", po.date_ordered.strftime('%Y-%m-%d') if po.date_ordered else ""])
+    writer.writerow(["Expected Delivery", po.expected_delivery_date.strftime('%Y-%m-%d') if po.expected_delivery_date else ""])
+    writer.writerow(["Invoice Date", po.invoice_date.strftime('%Y-%m-%d') if po.invoice_date else ""])
     lead_time = po.container_lead_time_days if po.container_lead_time_days is not None else (po.vendor.container_lead_time_days if po.vendor else "")
     writer.writerow(["Lead Time (days)", lead_time])
     writer.writerow(["Total Amount", f"{po.total_amount or 0} {po.currency or 'USD'}"])
     writer.writerow(["Notes", po.notes or ""])
     comments_str = " | ".join(
-        [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
+        [f"[{c.created_at.strftime('%Y-%m-%d')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
     ) if getattr(po, "comments", None) else ""
     writer.writerow(["Comments", comments_str])
     writer.writerow([])  # Empty row
@@ -2716,7 +2716,7 @@ def export_single_po_csv(
             if containers:
                 container_name = ", ".join([c.container_name or "" for c in containers])
                 container_eta = ", ".join([
-                    c.estimated_arrival_date.isoformat() if c.estimated_arrival_date else ""
+                    c.estimated_arrival_date.strftime('%Y-%m-%d') if c.estimated_arrival_date else ""
                     for c in containers
                 ])
         
@@ -2731,7 +2731,7 @@ def export_single_po_csv(
             item.qty_cases_ordered or 0,
             item.qty_units_per_case or 0,
             item.case_price or 0,
-            item.expected_delivery_date.isoformat() if item.expected_delivery_date else "",
+            item.expected_delivery_date.strftime('%Y-%m-%d') if item.expected_delivery_date else "",
             container_name,
             container_eta
         ])
@@ -2876,7 +2876,7 @@ def export_multiple_pos_csv(
         if not containers:
             return "", ""
         name = ", ".join([c.container_name or "" for c in containers])
-        eta = ", ".join([c.estimated_arrival_date.isoformat() if getattr(c, 'estimated_arrival_date', None) else "" for c in containers])
+        eta = ", ".join([c.estimated_arrival_date.strftime('%Y-%m-%d') if getattr(c, 'estimated_arrival_date', None) else "" for c in containers])
         return name, eta
 
     column_map = {
@@ -2885,13 +2885,15 @@ def export_multiple_pos_csv(
         "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
         "Customer Name": lambda p, i, c_name, c_eta: f"{p.customer.first_name or ''} {p.customer.last_name or ''}".strip() if p.customer else "",
         "Channel": lambda p, i, c_name, c_eta: p.channel.name if p.channel else "",
+        "Channel ID": lambda p, i, c_name, c_eta: str(p.channel_id) if p.channel_id else "",
         "Channel Order ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
+        "Warehouse": lambda p, i, c_name, c_eta: p.warehouse.name if p.warehouse else "",
         "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
         "Receiving Status": lambda p, i, c_name, c_eta: p.receiving_status_code or "",
-        "Created On": lambda p, i, c_name, c_eta: p.created_on.isoformat() if p.created_on else "",
-        "Date Ordered": lambda p, i, c_name, c_eta: p.date_ordered.isoformat() if p.date_ordered else "",
-        "Expected Delivery": lambda p, i, c_name, c_eta: p.expected_delivery_date.isoformat() if p.expected_delivery_date else "",
-        "Invoice Date": lambda p, i, c_name, c_eta: p.invoice_date.isoformat() if p.invoice_date else "",
+        "Created On": lambda p, i, c_name, c_eta: p.created_on.strftime('%Y-%m-%d') if p.created_on else "",
+        "Date Ordered": lambda p, i, c_name, c_eta: p.date_ordered.strftime('%Y-%m-%d') if p.date_ordered else "",
+        "Expected Delivery": lambda p, i, c_name, c_eta: p.expected_delivery_date.strftime('%Y-%m-%d') if p.expected_delivery_date else "",
+        "Invoice Date": lambda p, i, c_name, c_eta: p.invoice_date.strftime('%Y-%m-%d') if p.invoice_date else "",
         "Lead Time (days)": lambda p, i, c_name, c_eta: p.container_lead_time_days if p.container_lead_time_days is not None else (p.vendor.container_lead_time_days if p.vendor else ""),
         "Total Amount": lambda p, i, c_name, c_eta: p.total_amount or 0,
         "Currency": lambda p, i, c_name, c_eta: p.currency or "USD",
@@ -2905,15 +2907,15 @@ def export_multiple_pos_csv(
         "Cases Ordered": lambda p, i, c_name, c_eta: i.qty_cases_ordered or 0 if i else "",
         "Units per Case": lambda p, i, c_name, c_eta: i.qty_units_per_case or 0 if i else "",
         "Case Price": lambda p, i, c_name, c_eta: i.case_price or 0 if i else "",
-        "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.isoformat() if i and i.expected_delivery_date else "",
+        "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.strftime('%Y-%m-%d') if i and i.expected_delivery_date else "",
         "Container Name": lambda p, i, c_name, c_eta: c_name,
         "Container ETA": lambda p, i, c_name, c_eta: c_eta,
         "Notes": lambda p, i, c_name, c_eta: p.notes or "",
         "Comments": lambda p, i, c_name, c_eta: " | ".join(
-            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in p.comments]
+            [f"[{c.created_at.strftime('%Y-%m-%d')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in p.comments]
         ) if getattr(p, "comments", None) else "",
         "Item Comments": lambda p, i, c_name, c_eta: " | ".join(
-            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in i.comments]
+            [f"[{c.created_at.strftime('%Y-%m-%d')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in i.comments]
         ) if i and getattr(i, "comments", None) else ""
     }
 
