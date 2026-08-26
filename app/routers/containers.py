@@ -772,6 +772,7 @@ async def update_container(
     if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
         from app.services.email_service import send_container_emptied_notification
         formatted_date = container.date_emptied.strftime('%Y-%m-%d')
+        formatted_dropped_date = container.date_dropped_off.strftime('%Y-%m-%d') if container.date_dropped_off else None
         
         users_to_notify = db.query(models.User).filter(models.User.notify_trucker_email == True).all()
         cc_emails = [u.email for u in users_to_notify if u.email]
@@ -782,6 +783,7 @@ async def update_container(
             container_name=container.container_name,
             date_emptied=formatted_date,
             door_name=container.door,
+            date_dropped_off=formatted_dropped_date,
             cc_emails=cc_emails
         )
         container.last_notified_trucker_email = container.trucker_email
