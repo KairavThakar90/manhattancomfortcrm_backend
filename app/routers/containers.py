@@ -94,6 +94,7 @@ def list_containers(
     query = db.query(models.ShippingContainer).options(
         joinedload(models.ShippingContainer.warehouse),
         joinedload(models.ShippingContainer.attachments),
+        joinedload(models.ShippingContainer.logistics_company),
         joinedload(models.ShippingContainer.item_links).joinedload(models.PurchaseOrderItemContainer.item).joinedload(models.PurchaseOrderItem.purchase_order)
     )
 
@@ -219,6 +220,10 @@ def list_containers(
                 updated_at=ctr.updated_at,
                 date_dropped_off=ctr.date_dropped_off,
                 door=ctr.door,
+                trucker_email=ctr.trucker_email,
+                trucking_company=ctr.trucking_company,
+                logistics_company_id=ctr.logistics_company_id,
+                logistics_company=ctr.logistics_company,
                 date_emptied=ctr.date_emptied,
                 unloaded_by=ctr.unloaded_by,
                 unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
@@ -1249,7 +1254,8 @@ def get_container_details(
             .joinedload(models.PurchaseOrderItem.purchase_order)
             .joinedload(models.PurchaseOrder.vendor),
             joinedload(models.ShippingContainer.attachments),
-            joinedload(models.ShippingContainer.warehouse)
+            joinedload(models.ShippingContainer.warehouse),
+            joinedload(models.ShippingContainer.logistics_company)
         )
         .first()
     )
@@ -1301,6 +1307,9 @@ def get_container_details(
         date_dropped_off=container.date_dropped_off,
         door=container.door,
         trucker_email=container.trucker_email,
+        trucking_company=container.trucking_company,
+        logistics_company_id=container.logistics_company_id,
+        logistics_company=container.logistics_company,
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,

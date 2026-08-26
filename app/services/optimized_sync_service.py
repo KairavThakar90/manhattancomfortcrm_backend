@@ -79,32 +79,42 @@ class OptimizedSyncService:
         synced_po_ids = []
         
         try:
-            # Step 1: Fetch recently modified POs using SC's updatedDateFrom filter
+            # Step 1: Fetch POs only from the specified view (default: 25) and filter by date
             page = 1
             po_ids_to_sync = []
+            target_view_id = view_id or 25
             
             while True:
                 stats["api_calls"] += 1
-                
-                # Fetch only POs updated since cutoff_date
-                response = self.client.get_purchase_orders_updated_since(
-                    updated_from=cutoff_date,
+                response = self.client.get_purchase_orders_by_view(
+                    view_id=target_view_id,
                     page_number=page,
-                    page_size=batch_size
+                    page_size=100
                 )
-                
                 items = response.get("Items", [])
                 if not items:
                     break
                 
-                # All returned POs were updated recently, so we just add their IDs
                 for po in items:
-                    po_ids_to_sync.append(po.get("ID"))
+                    po_id = po.get("ID")
+                    if not po_id:
+                        continue
+                    
+                    # Parse revised or created date
+                    date_raw = po.get("LastRevisedOn") or po.get("CreatedOn")
+                    if date_raw:
+                        try:
+                            clean_date = date_raw.split(".")[0].replace("Z", "")
+                            po_date = datetime.fromisoformat(clean_date).replace(tzinfo=timezone.utc)
+                            if po_date >= cutoff_date:
+                                po_ids_to_sync.append(po_id)
+                        except ValueError:
+                            po_ids_to_sync.append(po_id)
+                    else:
+                        po_ids_to_sync.append(po_id)
                 
-                # Check if more pages
-                if len(items) < batch_size:
+                if len(items) < 100:
                     break
-                
                 page += 1
             
             # Remove duplicates just in case
@@ -470,7 +480,7 @@ class OptimizedSyncService:
                 response = self.client.get_purchase_orders_by_view(
                     view_id=25,
                     page_number=page,
-                    page_size=100
+                    page_size=50
                 )
                 items = response.get("Items", [])
                 if not items:
@@ -484,7 +494,7 @@ class OptimizedSyncService:
                 stats["sc_pos_fetched"] += len(items)
                 
                 # If we get fewer items than we asked for (or 0), we've hit the end
-                if len(items) < 10:
+                if len(items) < 50:
                     break
                 page += 1
                 
@@ -493,11 +503,17 @@ class OptimizedSyncService:
             local_pos = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id.isnot(None)).all()
             stats["local_pos_checked"] = len(local_pos)
             
-            # 3. Find POs that are in local but not in SC
+            # 3. Find POs that are in local but not in SC (with double-check to prevent deleting completed POs filtered out of view)
             deleted_po_ids = []
             for local_po in local_pos:
                 if local_po.sellercloud_po_id not in valid_sc_po_ids:
-                    deleted_po_ids.append(local_po.sellercloud_po_id)
+                    try:
+                        self.client.get_purchase_order(local_po.sellercloud_po_id)
+                        # If this succeeds, the PO still exists on SellerCloud (just filtered out of the view)
+                    except Exception as e:
+                        # If it fails with a 500 or 404, it is actually deleted
+                        if "500" in str(e) or "404" in str(e) or "not found" in str(e).lower():
+                            deleted_po_ids.append(local_po.sellercloud_po_id)
             
             # 4. Delete them locally
             for po_id in deleted_po_ids:
