@@ -2885,7 +2885,7 @@ def export_multiple_pos_csv(
         "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
         "Customer Name": lambda p, i, c_name, c_eta: f"{p.customer.first_name or ''} {p.customer.last_name or ''}".strip() if p.customer else "",
         "Channel": lambda p, i, c_name, c_eta: p.channel.name if p.channel else "",
-        "Channel ID": lambda p, i, c_name, c_eta: p.channel.name if p.channel else "",
+        "Channel ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
         "Channel Order ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
         "Warehouse": lambda p, i, c_name, c_eta: p.warehouse.name if p.warehouse else "",
         "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
