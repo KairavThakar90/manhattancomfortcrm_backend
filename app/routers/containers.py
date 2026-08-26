@@ -704,19 +704,25 @@ async def update_container(
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
         "unload_cost", "drayage_cost", "customs_duty_misc", 
         "per_diem", "country_of_origin", "receiving_closure_notes", 
-        "factory_credit_needed", "trucker_email"
+        "factory_credit_needed", "trucker_email", "trucking_company",
+        "logistics_company_id"
     ]
     for field in lifecycle_fields:
         if field in update_dict:
             new_val = update_dict[field]
             old_val = getattr(container, field)
             
-            if isinstance(old_val, datetime):
+            import uuid
+            if isinstance(old_val, uuid.UUID):
+                old_val_str = str(old_val)
+            elif isinstance(old_val, datetime):
                 old_val_str = old_val.isoformat()
             else:
                 old_val_str = old_val
                 
-            if isinstance(new_val, datetime):
+            if isinstance(new_val, uuid.UUID):
+                new_val_str = str(new_val)
+            elif isinstance(new_val, datetime):
                 new_val_str = new_val.isoformat()
             else:
                 new_val_str = new_val
@@ -764,30 +770,54 @@ async def update_container(
             db.add(att_model)
             uploaded_attachments.append(att_model)
 
+    # Explicitly load logistics company relationship if ID is present
+    if container.logistics_company_id and not container.logistics_company:
+        container.logistics_company = db.query(models.LogisticsCompany).filter(models.LogisticsCompany.id == container.logistics_company_id).first()
+
+    # Auto-populate trucker_email if it's empty but we have a logistics company primary email
+    if not container.trucker_email and container.logistics_company and container.logistics_company.primary_email:
+        container.trucker_email = container.logistics_company.primary_email
+
     container.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(container)
 
     # Email notification logic
-    if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
-        from app.services.email_service import send_container_emptied_notification
-        formatted_date = container.date_emptied.strftime('%Y-%m-%d')
-        formatted_dropped_date = container.date_dropped_off.strftime('%Y-%m-%d') if container.date_dropped_off else None
-        
-        users_to_notify = db.query(models.User).filter(models.User.notify_trucker_email == True).all()
-        cc_emails = [u.email for u in users_to_notify if u.email]
-        
-        background_tasks.add_task(
-            send_container_emptied_notification,
-            email_to=container.trucker_email,
-            container_name=container.container_name,
-            date_emptied=formatted_date,
-            door_name=container.door,
-            date_dropped_off=formatted_dropped_date,
-            cc_emails=cc_emails
-        )
-        container.last_notified_trucker_email = container.trucker_email
-        db.commit()
+    if container.date_emptied:
+        email_to = None
+        if container.logistics_company and container.logistics_company.primary_email:
+            email_to = container.logistics_company.primary_email
+        else:
+            email_to = container.trucker_email
+
+        if email_to and email_to != container.last_notified_trucker_email:
+            from app.services.email_service import send_container_emptied_notification
+            formatted_date = container.date_emptied.strftime('%Y-%m-%d')
+            formatted_dropped_date = container.date_dropped_off.strftime('%Y-%m-%d') if container.date_dropped_off else None
+            
+            # Base CC list: Internal CRM users who enabled notifications
+            users_to_notify = db.query(models.User).filter(models.User.notify_trucker_email == True).all()
+            cc_emails = [u.email for u in users_to_notify if u.email]
+            
+            # Append Logistics Company CC emails if present
+            if container.logistics_company and container.logistics_company.cc_email:
+                # cc_email can be comma-separated, split and clean
+                extra_ccs = [email.strip() for email in container.logistics_company.cc_email.split(',') if email.strip()]
+                for email in extra_ccs:
+                    if email not in cc_emails:
+                        cc_emails.append(email)
+            
+            background_tasks.add_task(
+                send_container_emptied_notification,
+                email_to=email_to,
+                container_name=container.container_name,
+                date_emptied=formatted_date,
+                door_name=container.door,
+                date_dropped_off=formatted_dropped_date,
+                cc_emails=cc_emails
+            )
+            container.last_notified_trucker_email = email_to
+            db.commit()
 
     details_payload = update_data.model_dump(mode='json', exclude_unset=True)
     if changes:

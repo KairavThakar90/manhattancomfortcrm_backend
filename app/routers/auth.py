@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
@@ -298,6 +298,7 @@ def get_all_users(
 
 @router.get("/users/tag", response_model=list[UserMentionOut])
 def get_mentionable_users(
+    role: Optional[str] = Query(None, description="Optional role filter (e.g. 'vendor', 'warehouse'). If provided, returns all active users of this role, bypassing standard visibility restrictions."),
     current_user: models.User = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -307,17 +308,20 @@ def get_mentionable_users(
         models.User.email != "googlecloudcron@manhattancomfort.com"
     )
     
-    if current_user.role == "warehouse":
-        query = query.filter(
-            (models.User.role == "admin") | 
-            ((models.User.role == "warehouse") & (models.User.warehouse_id == current_user.warehouse_id))
-        )
-    elif current_user.role == "vendor":
-        query = query.filter(
-            (models.User.role == "admin") | 
-            (models.User.role == "office") | 
-            ((models.User.role == "vendor") & (models.User.vendor_id == current_user.vendor_id))
-        )
+    if role:
+        query = query.filter(models.User.role == role)
+    else:
+        if current_user.role == "warehouse":
+            query = query.filter(
+                (models.User.role == "admin") | 
+                ((models.User.role == "warehouse") & (models.User.warehouse_id == current_user.warehouse_id))
+            )
+        elif current_user.role == "vendor":
+            query = query.filter(
+                (models.User.role == "admin") | 
+                (models.User.role == "office") | 
+                ((models.User.role == "vendor") & (models.User.vendor_id == current_user.vendor_id))
+            )
         
     users = query.all()
     return [UserMentionOut.model_validate(u) for u in users]
