@@ -121,6 +121,13 @@ async def send_tag_notification(
     if sku:
         details_html += f"<p style='margin: 0 0 5px 0;'><strong>SKU:</strong> {sku}</p>"
 
+    button_html = ""
+    if not container_name:
+        button_html = f"""
+        <p>Click the button below to view it in the dashboard:</p>
+        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
+        """
+
     html = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
         <h2 style="color: #333;">You were mentioned!</h2>
@@ -132,8 +139,7 @@ async def send_tag_notification(
             <p style="white-space: pre-wrap; margin: 0;">{comment_text}</p>
         </div>
         
-        <p>Click the button below to view it in the dashboard:</p>
-        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
+        {button_html}
         {EMAIL_SIGNATURE_HTML}
     </div>
     """
