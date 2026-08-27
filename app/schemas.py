@@ -408,7 +408,7 @@ class ShippingContainerCommentOut(BaseModel):
     user_name: Optional[str] = None
     parent_id: Optional[uuid.UUID] = None
     is_edited: bool = False
-    attachments: List[AttachmentOut] = []
+    attachments: List['AttachmentOut'] = []
     
     model_config = ConfigDict(from_attributes=True)
 
