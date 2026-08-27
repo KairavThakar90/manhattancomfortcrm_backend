@@ -391,7 +391,8 @@ def list_purchase_orders(
         subq = db.query(
             models.PurchaseOrderItem.purchase_order_id,
             func.sum(models.PurchaseOrderItem.qty_ordered).label('tot_ord'),
-            func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec')
+            func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec'),
+            func.sum(models.PurchaseOrderItem.qty_in_container).label('tot_in_container')
         ).group_by(models.PurchaseOrderItem.purchase_order_id).subquery()
         
         q = q.outerjoin(subq, models.PurchaseOrder.id == subq.c.purchase_order_id)
@@ -410,19 +411,24 @@ def list_purchase_orders(
         if status == "SHIPPED":
             q = q.filter(
                 func.coalesce(subq.c.tot_ord, 0) > 0,
-                func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
+                func.coalesce(subq.c.tot_in_container, 0) >= func.coalesce(subq.c.tot_ord, 0)
             )
         elif status == "PARTIALLY_SHIPPED":
             q = q.filter(
                 func.coalesce(subq.c.tot_ord, 0) > 0,
-                func.coalesce(subq.c.tot_rec, 0) > 0,
-                func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)
+                func.coalesce(subq.c.tot_in_container, 0) > 0,
+                func.coalesce(subq.c.tot_in_container, 0) < func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif status == "NOT_STARTED":
+            q = q.filter(
+                (models.PurchaseOrder.status == "NOT_STARTED") | (models.PurchaseOrder.status.is_(None)),
+                func.coalesce(subq.c.tot_in_container, 0) == 0
             )
         elif status is not None:
             # For other statuses (e.g. IN_PRODUCTION), only match if not overridden by dynamic logic
             q = q.filter(
                 models.PurchaseOrder.status == status,
-                func.coalesce(subq.c.tot_rec, 0) == 0
+                func.coalesce(subq.c.tot_in_container, 0) == 0
             )
     
     

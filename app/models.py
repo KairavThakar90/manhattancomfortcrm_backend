@@ -61,6 +61,7 @@ class User(Base):
     warehouse = relationship("Warehouse")
     po_comments = relationship("PurchaseOrderComment", back_populates="user")
     po_item_comments = relationship("PurchaseOrderItemComment", back_populates="user")
+    container_comments = relationship("ShippingContainerComment", back_populates="user")
 
 
 class Company(Base):
@@ -347,6 +348,37 @@ class ShippingContainer(Base):
     logistics_company = relationship("LogisticsCompany", back_populates="containers")
     attachments = relationship("ShippingContainerAttachment", back_populates="container", cascade="all, delete-orphan")
     tracking = relationship("ShippingContainerTracking", back_populates="container", uselist=False, cascade="all, delete-orphan")
+    comments = relationship("ShippingContainerComment", back_populates="container", cascade="all, delete-orphan")
+
+class ShippingContainerComment(Base):
+    __tablename__ = "shipping_container_comments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shipping_container_id = Column(UUID(as_uuid=True), ForeignKey("shipping_containers.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("shipping_container_comments.id", ondelete="CASCADE"), nullable=True)
+    comment = Column(Text, nullable=False)
+    category = Column(String(50), nullable=False) # 'vendor_credit' or 'receiving_closure'
+    is_edited = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    container = relationship("ShippingContainer", back_populates="comments")
+    user = relationship("User", back_populates="container_comments")
+    replies = relationship("ShippingContainerComment")
+    attachments = relationship("ShippingContainerCommentAttachment", back_populates="comment", cascade="all, delete-orphan")
+
+class ShippingContainerCommentAttachment(Base):
+    __tablename__ = "shipping_container_comment_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    comment_id = Column(UUID(as_uuid=True), ForeignKey("shipping_container_comments.id", ondelete="CASCADE"), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_url = Column(Text, nullable=False)
+    content_type = Column(String(100), nullable=True)
+    size = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    comment = relationship("ShippingContainerComment", back_populates="attachments")
 
 class ShippingContainerAttachment(Base):
     __tablename__ = "shipping_container_attachments"

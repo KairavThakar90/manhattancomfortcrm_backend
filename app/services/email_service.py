@@ -95,7 +95,8 @@ async def send_tag_notification(
     po_number: str = None, 
     sku: str = None, 
     comment_text: str = "",
-    attachments: list = None
+    attachments: list = None,
+    container_name: str = None
 ):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         logger.warning("SMTP credentials not configured. Skipping email notification.")
@@ -104,14 +105,18 @@ async def send_tag_notification(
     action_text = "edited a comment you were mentioned in" if is_edit else "mentioned you in a comment"
     
     subject = f"Manhattan Comfort Dashboard - {section}"
-    if po_number:
+    if container_name:
+        subject += f" (Container: {container_name})"
+    elif po_number:
         subject += f" (PO #{po_number}"
         if sku:
             subject += f", SKU: {sku}"
         subject += ")"
 
     details_html = ""
-    if po_number:
+    if container_name:
+        details_html += f"<p style='margin: 0 0 5px 0;'><strong>Container Name:</strong> {container_name}</p>"
+    elif po_number:
         details_html += f"<p style='margin: 0 0 5px 0;'><strong>PO Number:</strong> {po_number}</p>"
     if sku:
         details_html += f"<p style='margin: 0 0 5px 0;'><strong>SKU:</strong> {sku}</p>"
