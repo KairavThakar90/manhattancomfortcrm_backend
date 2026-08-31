@@ -904,18 +904,22 @@ class PurchaseOrderOut(BaseModel):
         # 3. Dynamic status calculation based on container quantities
         qty_ord = instance.total_qty_ordered or 0
         qty_cont = instance.total_qty_in_container or 0
+        status_lower = instance.status.lower() if instance.status else ""
+        manual_statuses = {"delayed", "in_production", "planned", "not_planned", "completed", "not_started"}
+        
         if qty_ord > 0:
             if qty_cont >= qty_ord:
                 instance.status = "SHIPPED"
             elif qty_cont > 0:
-                instance.status = "PARTIALLY_SHIPPED"
+                if status_lower not in manual_statuses:
+                    instance.status = "PARTIALLY_SHIPPED"
             else:
                 # If there are no items in container, preserve existing status (e.g., DELAYED, IN_PRODUCTION) if present.
                 # Otherwise, default to NOT_STARTED.
-                if not instance.status or instance.status in ("NOT_STARTED", "SHIPPED", "PARTIALLY_SHIPPED"):
+                if status_lower not in manual_statuses:
                     instance.status = "NOT_STARTED"
         else:
-            if not instance.status or instance.status in ("NOT_STARTED", "SHIPPED", "PARTIALLY_SHIPPED"):
+            if status_lower not in manual_statuses:
                 instance.status = "NOT_STARTED"
         
         return instance

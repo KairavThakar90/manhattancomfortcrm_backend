@@ -422,13 +422,15 @@ def list_purchase_orders(
         elif status == "NOT_STARTED":
             q = q.filter(
                 (models.PurchaseOrder.status == "NOT_STARTED") | (models.PurchaseOrder.status.is_(None)),
-                func.coalesce(subq.c.tot_in_container, 0) == 0
+                # Either no items are in container, or the status is explicitly set to NOT_STARTED in DB
+                (func.coalesce(subq.c.tot_in_container, 0) == 0) | (func.lower(models.PurchaseOrder.status) == "not_started")
             )
         elif status is not None:
-            # For other statuses (e.g. IN_PRODUCTION), only match if not overridden by dynamic logic
+            # For other statuses (e.g. IN_PRODUCTION, DELAYED), only exclude them if fully shipped (dynamic SHIPPED override)
             q = q.filter(
                 func.lower(models.PurchaseOrder.status) == status.lower(),
-                func.coalesce(subq.c.tot_in_container, 0) == 0
+                (func.coalesce(subq.c.tot_in_container, 0) < func.coalesce(subq.c.tot_ord, 0)) |
+                (func.coalesce(subq.c.tot_ord, 0) == 0)
             )
     
     

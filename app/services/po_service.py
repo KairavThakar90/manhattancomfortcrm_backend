@@ -21,15 +21,18 @@ def recalculate_po_shipment_status(db: Session, po_id: str):
     total_ordered = sum(item.qty_ordered for item in items if item.qty_ordered)
     total_in_container = sum(item.qty_in_container for item in items if item.qty_in_container)
     
-    if total_in_container > 0:
-        if total_in_container >= total_ordered:
-            po.status = "SHIPPED"
-        else:
-            po.status = "PARTIALLY_SHIPPED"
+    manual_statuses = {"delayed", "in_production", "planned", "not_planned", "completed", "not_started"}
+    current_status_lower = po.status.lower() if po.status else ""
+    
+    is_fully_shipped = total_in_container >= total_ordered if total_ordered > 0 else False
+    
+    if is_fully_shipped:
+        po.status = "SHIPPED"
     else:
-        # Only clear the status if it was set to a shipment status (SHIPPED or PARTIALLY_SHIPPED).
-        # Do not overwrite manual production statuses like DELAYED or IN_PRODUCTION.
-        if po.status in ("SHIPPED", "PARTIALLY_SHIPPED"):
-            po.status = None
+        if current_status_lower not in manual_statuses:
+            if total_in_container > 0:
+                po.status = "PARTIALLY_SHIPPED"
+            else:
+                po.status = None
             
     db.commit()
