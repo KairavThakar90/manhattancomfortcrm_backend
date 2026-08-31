@@ -3117,6 +3117,7 @@ def export_multiple_pos_csv(
 
 @router.post("/sync/optimized")
 def sync_pos_optimized(
+    request: Request,
     days: int = Query(7, description="Sync POs modified in last N days"),
     batch_size: int = Query(25, description="Number of POs per API call"),
     view_id: Optional[int] = Query(None, description="SellerCloud saved view ID (default: 25)"),
@@ -3142,8 +3143,18 @@ def sync_pos_optimized(
     
     Returns detailed statistics about what was synced.
     """
+    # Extract 'days' parameter case-insensitively
+    days_val = days
+    for k, v in request.query_params.items():
+        if k.lower() == "days":
+            try:
+                days_val = int(v)
+                break
+            except ValueError:
+                pass
+
     sync_service = OptimizedSyncService(db)
-    result = sync_service.sync_recent_pos(days=days, batch_size=batch_size, view_id=view_id)
+    result = sync_service.sync_recent_pos(days=days_val, batch_size=batch_size, view_id=view_id)
     
     if result.get("success"):
         return {

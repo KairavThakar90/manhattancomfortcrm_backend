@@ -20,6 +20,50 @@ from app import models
 from app.services.sellercloud_client import sellercloud_client
 
 
+def _parse_iso_datetime(dt_str: Optional[str]) -> Optional[datetime]:
+    if not dt_str:
+        return None
+    dt_str = dt_str.strip().replace("Z", "")
+    
+    # Try fromisoformat first (succeeds on Python 3.11+ for any fractional length, 
+    # and 3.7-3.10 for exactly 0, 3, or 6 fraction digits)
+    try:
+        return datetime.fromisoformat(dt_str)
+    except ValueError:
+        pass
+        
+    # Standard formats fallback for older Python versions (like Python 3.10 or below on live)
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f", 
+        "%Y-%m-%d %H:%M:%S.%f", 
+        "%Y-%m-%dT%H:%M:%S", 
+        "%Y-%m-%d %H:%M:%S", 
+        "%Y-%m-%d"
+    ):
+        try:
+            return datetime.strptime(dt_str, fmt)
+        except ValueError:
+            continue
+            
+    # Try parsing manually if it's a decimal/fractional seconds mismatch (e.g. 2 digits like .56)
+    if "." in dt_str:
+        base, frac = dt_str.rsplit(".", 1)
+        # Pad or truncate fraction to 6 digits (microseconds) for strptime compatibility
+        frac = (frac + "000000")[:6]
+        dt_str_clean = f"{base}.{frac}"
+        try:
+            return datetime.strptime(dt_str_clean, "%Y-%m-%dT%H:%M:%S.%f")
+        except ValueError:
+            pass
+        try:
+            return datetime.strptime(dt_str_clean, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            pass
+            
+    return None
+
+
+
 def _log_sync(db: Session, entity_type: str, status: str, count: int, message: str = ""):
     log = models.SyncLog(
         entity_type=entity_type,
@@ -663,8 +707,8 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
             is_bundle_component=parent_item_id is not None,
             parent_sellercloud_item_id=parent_item_id,
             expected_delivery_date=(
-                datetime.fromisoformat(li.get("ExpectedDeliveryDate").replace("Z", "")).replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-                if li.get("ExpectedDeliveryDate") else None
+                _parse_iso_datetime(li.get("ExpectedDeliveryDate")).replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
+                if li.get("ExpectedDeliveryDate") and _parse_iso_datetime(li.get("ExpectedDeliveryDate")) else None
             ),
             raw_json=li,
         )
@@ -907,11 +951,9 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                     received_date = None
                     recv_raw = details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate")
                     if recv_raw:
-                        try:
-                            raw_dt = datetime.fromisoformat(recv_raw.replace("Z", ""))
-                            received_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-                        except ValueError:
-                            pass
+                        parsed_recv = _parse_iso_datetime(recv_raw)
+                        if parsed_recv:
+                            received_date = parsed_recv.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
 
                     container_fields = dict(
                         sellercloud_container_id=container_sc_id,
