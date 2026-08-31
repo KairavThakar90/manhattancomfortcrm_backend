@@ -11,6 +11,7 @@ NOTE: Confirm exact field/endpoint names against your own Swagger UI
 some route names can differ slightly per SellerCloud tenant/version.
 """
 import time
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -148,6 +149,27 @@ class SellerCloudClient:
                 "viewID": view_id or 25,
                 "pageNumber": page_number,
                 "pageSize": page_size,
+            },
+        )
+        return resp.json()
+
+    def get_purchase_orders_updated_since(
+        self, updated_from: datetime, page_number: int = 1, page_size: int = 50
+    ) -> dict:
+        """
+        Fetch POs that were updated after a certain date.
+        Uses GET /api/PurchaseOrders?model.updatedDateFrom={date}
+        """
+        # Format date as ISO string (e.g., 2026-08-25T00:00:00)
+        date_str = updated_from.isoformat()
+        
+        resp = self._request(
+            "GET",
+            "/api/PurchaseOrders",
+            params={
+                "model.updatedDateFrom": date_str,
+                "model.pageNumber": page_number,
+                "model.pageSize": page_size,
             },
         )
         return resp.json()

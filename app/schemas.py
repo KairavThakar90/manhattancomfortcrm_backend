@@ -317,7 +317,6 @@ class LogisticsCompanyOut(LogisticsCompanyBase):
     created_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
         from_attributes = True
 
 
@@ -400,6 +399,20 @@ class ContainerDetailItemOut(BaseModel):
     unit_price: Optional[float] = None
 
 
+class ShippingContainerCommentOut(BaseModel):
+    id: uuid.UUID
+    comment: str
+    category: str
+    created_at: datetime
+    user_id: Optional[uuid.UUID] = None
+    user_name: Optional[str] = None
+    parent_id: Optional[uuid.UUID] = None
+    is_edited: bool = False
+    attachments: List['AttachmentOut'] = []
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ContainerDetailOut(BaseModel):
     """Full container detail with all items and summary."""
     id: uuid.UUID
@@ -434,6 +447,8 @@ class ContainerDetailOut(BaseModel):
     items: List[ContainerDetailItemOut] = []
     attachments: List[ContainerAttachmentOut] = []
     tracking: Optional[ContainerTrackingOut] = None
+    vendor_credit_comments: List[ShippingContainerCommentOut] = []
+    receiving_closure_comments: List[ShippingContainerCommentOut] = []
 
     @computed_field
     def sellercloud_link(self) -> Optional[str]:
@@ -890,14 +905,26 @@ class PurchaseOrderOut(BaseModel):
         else:
             instance.is_container_overdue = "No"  # No invoice
             
-        # 3. Dynamic status calculation based on received quantities
+        # 3. Dynamic status calculation based on container quantities
         qty_ord = instance.total_qty_ordered or 0
-        qty_rec = instance.total_qty_received or 0
+        qty_cont = instance.total_qty_in_container or 0
+        status_lower = instance.status.lower() if instance.status else ""
+        manual_statuses = {"delayed", "in_production", "planned", "not_planned", "completed", "not_started"}
+        
         if qty_ord > 0:
-            if qty_rec >= qty_ord:
+            if qty_cont >= qty_ord:
                 instance.status = "SHIPPED"
-            elif qty_rec > 0:
-                instance.status = "PARTIALLY_SHIPPED"
+            elif qty_cont > 0:
+                if status_lower not in manual_statuses:
+                    instance.status = "PARTIALLY_SHIPPED"
+            else:
+                # If there are no items in container, preserve existing status (e.g., DELAYED, IN_PRODUCTION) if present.
+                # Otherwise, default to NOT_STARTED.
+                if status_lower not in manual_statuses:
+                    instance.status = "NOT_STARTED"
+        else:
+            if status_lower not in manual_statuses:
+                instance.status = "NOT_STARTED"
         
         return instance
 

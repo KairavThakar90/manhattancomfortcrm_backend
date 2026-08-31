@@ -95,7 +95,8 @@ async def send_tag_notification(
     po_number: str = None, 
     sku: str = None, 
     comment_text: str = "",
-    attachments: list = None
+    attachments: list = None,
+    container_name: str = None
 ):
     if not settings.SMTP_USER or not settings.SMTP_PASS:
         logger.warning("SMTP credentials not configured. Skipping email notification.")
@@ -104,17 +105,28 @@ async def send_tag_notification(
     action_text = "edited a comment you were mentioned in" if is_edit else "mentioned you in a comment"
     
     subject = f"Manhattan Comfort Dashboard - {section}"
-    if po_number:
+    if container_name:
+        subject += f" (Container: {container_name})"
+    elif po_number:
         subject += f" (PO #{po_number}"
         if sku:
             subject += f", SKU: {sku}"
         subject += ")"
 
     details_html = ""
-    if po_number:
+    if container_name:
+        details_html += f"<p style='margin: 0 0 5px 0;'><strong>Container Name:</strong> {container_name}</p>"
+    elif po_number:
         details_html += f"<p style='margin: 0 0 5px 0;'><strong>PO Number:</strong> {po_number}</p>"
     if sku:
         details_html += f"<p style='margin: 0 0 5px 0;'><strong>SKU:</strong> {sku}</p>"
+
+    button_html = ""
+    if not container_name:
+        button_html = f"""
+        <p>Click the button below to view it in the dashboard:</p>
+        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
+        """
 
     html = f"""
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
@@ -127,8 +139,7 @@ async def send_tag_notification(
             <p style="white-space: pre-wrap; margin: 0;">{comment_text}</p>
         </div>
         
-        <p>Click the button below to view it in the dashboard:</p>
-        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
+        {button_html}
         {EMAIL_SIGNATURE_HTML}
     </div>
     """
@@ -216,7 +227,8 @@ async def send_po_status_update_email(
     po_number: str, 
     old_status: str, 
     new_status: str, 
-    vendor_name: str
+    updater_name: str,
+    updater_role: str = "vendor"
 ):
     from app.models import User
     
@@ -231,7 +243,8 @@ async def send_po_status_update_email(
     if not emails:
         return
 
-    subject = f"PO #{po_number} Status Update - {vendor_name}"
+    role_label = "Admin" if updater_role == "admin" else "Vendor"
+    subject = f"PO #{po_number} Status Update - {updater_name}"
     
     changes_html = ""
     if old_status != new_status:
@@ -241,7 +254,7 @@ async def send_po_status_update_email(
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
         <h2 style="color: #333;">Purchase Order Status Updated</h2>
         <p style="font-size: 16px; color: #555;">
-            Vendor <strong>{vendor_name}</strong> has updated the status for PO <strong>#{po_number}</strong>.
+            {role_label} <strong>{updater_name}</strong> has updated the status for PO <strong>#{po_number}</strong>.
         </p>
         <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin-top: 15px; border-left: 4px solid #007bff;">
             {changes_html}
@@ -484,3 +497,64 @@ async def send_aggregated_delay_notification(emails: list, invoice_delayed_pos: 
         await fm.send_message(message)
     except Exception as e:
         logger.error(f"Failed to send weekly digest: {e}")
+
+
+async def send_container_lifecycle_tag_notification(
+    emails: list[str],
+    commenter_name: str,
+    link: str,
+    field_name: str,  # "Vendor Credit Needed" or "Receiving Closure Notes"
+    field_value: str,
+    container_name: str,
+    *args,
+    **kwargs
+):
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        logger.warning("SMTP credentials not configured. Skipping email notification.")
+        return
+
+    subject = f"Manhattan Comfort Dashboard - Container {container_name} ({field_name})"
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px; color: #333;">
+        <h2 style="color: #007bff; margin-top: 0;">You were mentioned in Container {container_name}!</h2>
+        <p><strong>{commenter_name}</strong> has tagged you in the <strong>{field_name}</strong> section.</p>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-top: 20px; border: 1px solid #ddd;">
+            <tr style="background-color: #f2f2f2;">
+                <th style="padding: 12px; border: 1px solid #ddd; text-align: left; width: 30%;">Field</th>
+                <th style="padding: 12px; border: 1px solid #ddd; text-align: left; width: 70%;">Details</th>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">Container Name</td>
+                <td style="padding: 12px; border: 1px solid #ddd;">{container_name}</td>
+            </tr>
+            <tr>
+                <td style="padding: 12px; border: 1px solid #ddd; font-weight: bold;">{field_name}</td>
+                <td style="padding: 12px; border: 1px solid #ddd; white-space: pre-wrap;">{field_value}</td>
+            </tr>
+        </table>
+        {EMAIL_SIGNATURE_HTML}
+    </div>
+    """
+
+    if not emails:
+        return
+
+    to_email = emails[0]
+    cc_list = emails[1:] if len(emails) > 1 else []
+
+    message = MessageSchema(
+        subject=subject,
+        recipients=[to_email],
+        cc=cc_list,
+        body=html,
+        subtype=MessageType.html
+    )
+    
+    try:
+        fm = FastMail(conf)
+        await fm.send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send container lifecycle tag notification: {str(e)}")
+

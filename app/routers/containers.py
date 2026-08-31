@@ -4,7 +4,7 @@ Container API endpoints
 from typing import Optional, List
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form, Request
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -14,7 +14,7 @@ from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
     ContainerUpdate, ContainerAddItems, ContainerActivityCreate, ContainerAttachmentOut,
-    UserActivityLogOut, PaginatedResponse, ContainerTrackingOut
+    UserActivityLogOut, PaginatedResponse, ContainerTrackingOut, ShippingContainerCommentOut
 )
 from app.services.sellercloud_client import SellerCloudClient
 from app.services.activity_service import log_activity
@@ -63,6 +63,10 @@ def list_containers(
     sellercloud_warehouse_id: Optional[int] = Query(None, description="Filter by SellerCloud Warehouse ID"),
     date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date"),
+    receive_date_from: Optional[datetime] = Query(None, description="Filter containers received on or after this date (alias for date_from)"),
+    receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date (alias for date_to)"),
+    eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
+    eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
     sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
@@ -90,6 +94,7 @@ def list_containers(
     query = db.query(models.ShippingContainer).options(
         joinedload(models.ShippingContainer.warehouse),
         joinedload(models.ShippingContainer.attachments),
+        joinedload(models.ShippingContainer.logistics_company),
         joinedload(models.ShippingContainer.item_links).joinedload(models.PurchaseOrderItemContainer.item).joinedload(models.PurchaseOrderItem.purchase_order)
     )
 
@@ -125,6 +130,14 @@ def list_containers(
     if current_user.role == "warehouse" and current_user.warehouse_id:
         query = query.filter(models.ShippingContainer.warehouse_id == current_user.warehouse_id)
 
+    # Restrict Vendors to their assigned vendor containers
+    if current_user.role == "vendor" and current_user.vendor_id:
+        vendor_container_ids = db.query(models.PurchaseOrderItemContainer.shipping_container_id) \
+            .join(models.PurchaseOrderItem, models.PurchaseOrderItemContainer.purchase_order_item_id == models.PurchaseOrderItem.id) \
+            .join(models.PurchaseOrder, models.PurchaseOrderItem.purchase_order_id == models.PurchaseOrder.id) \
+            .filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+        query = query.filter(models.ShippingContainer.id.in_(vendor_container_ids))
+
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:
         po_query = db.query(models.PurchaseOrderItemContainer.shipping_container_id) \
@@ -140,15 +153,28 @@ def list_containers(
             
         query = query.filter(models.ShippingContainer.id.in_(po_query))
 
-    # Filter by received date range
-    if date_from:
-        query = query.filter(models.ShippingContainer.received_date >= date_from)
-    if date_to:
-        # If date_to has no time component (midnight), extend it to the end of the day
-        if date_to.time() == datetime.min.time():
+    # Filter by received date range (supports both date_from/date_to and receive_date_from/receive_date_to)
+    effective_date_from = date_from or receive_date_from
+    effective_date_to = date_to or receive_date_to
+
+    if effective_date_from:
+        query = query.filter(models.ShippingContainer.received_date >= effective_date_from)
+    if effective_date_to:
+        # If effective_date_to has no time component (midnight), extend it to the end of the day
+        if effective_date_to.time() == datetime.min.time():
             from datetime import time
-            date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
-        query = query.filter(models.ShippingContainer.received_date <= date_to)
+            effective_date_to = datetime.combine(effective_date_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.received_date <= effective_date_to)
+
+    # Filter by ETA date range
+    if eta_from:
+        query = query.filter(models.ShippingContainer.estimated_arrival_date >= eta_from)
+    if eta_to:
+        # If eta_to has no time component (midnight), extend it to the end of the day
+        if eta_to.time() == datetime.min.time():
+            from datetime import time
+            eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999))
+        query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
 
     if sort_by == "eta_delivery":
         sort_col = models.ShippingContainer.estimated_arrival_date
@@ -202,10 +228,15 @@ def list_containers(
                 updated_at=ctr.updated_at,
                 date_dropped_off=ctr.date_dropped_off,
                 door=ctr.door,
+                trucker_email=ctr.trucker_email,
+                trucking_company=ctr.trucking_company,
+                logistics_company_id=ctr.logistics_company_id,
+                logistics_company=ctr.logistics_company,
                 date_emptied=ctr.date_emptied,
                 unloaded_by=ctr.unloaded_by,
                 unload_cost=float(ctr.unload_cost) if ctr.unload_cost is not None else None,
-                container_cost_drayage=float(ctr.drayage_cost) if ctr.drayage_cost is not None else None,
+                container_shipping_cost=float(ctr.container_shipping_cost) if ctr.container_shipping_cost is not None else None,
+                drayage_cost=float(ctr.drayage_cost) if ctr.drayage_cost is not None else None,
                 customs_duty_misc=float(ctr.customs_duty_misc) if ctr.customs_duty_misc is not None else None,
                 per_diem=float(ctr.per_diem) if ctr.per_diem is not None else None,
                 country_of_origin=ctr.country_of_origin,
@@ -479,15 +510,19 @@ def create_container(
         sc_client = SellerCloudClient()
 
         # STEP 1: Create the container (SC API only accepts name/dates — NOT items)
-        sc_response = sc_client.create_shipping_container(sc_container_payload)
-        if isinstance(sc_response, dict):
-            sellercloud_container_id = (
-                sc_response.get("ID")
-                or sc_response.get("Id")
-                or sc_response.get("ContainerID")
-                or sc_response.get("ContainerId")
-                or sc_response.get("id")
-            )
+        try:
+            sc_response = sc_client.create_shipping_container(sc_container_payload)
+            if isinstance(sc_response, dict):
+                sellercloud_container_id = (
+                    sc_response.get("ID")
+                    or sc_response.get("Id")
+                    or sc_response.get("ContainerID")
+                    or sc_response.get("ContainerId")
+                    or sc_response.get("id")
+                )
+        except Exception as create_err:
+            print(f"[create_container] SC Create failed (maybe duplicate name): {create_err}")
+            sc_response = {"error": str(create_err)}
 
         # Fallback: SC sometimes returns empty body — search by name to recover ID
         if not sellercloud_container_id:
@@ -540,7 +575,8 @@ def create_container(
         date_emptied=container_data.date_emptied,
         unloaded_by=container_data.unloaded_by,
         unload_cost=container_data.unload_cost,
-        drayage_cost=container_data.container_cost_drayage,
+        container_shipping_cost=container_data.container_shipping_cost,
+        drayage_cost=container_data.drayage_cost,
         customs_duty_misc=container_data.customs_duty_misc,
         per_diem=container_data.per_diem,
         country_of_origin=container_data.country_of_origin,
@@ -610,6 +646,51 @@ def create_container(
     return response
 
 
+def parse_mentions(text: str, db: Session) -> list[models.User]:
+    if not text:
+        return []
+    
+    import re
+    # 1. Match email addresses first (e.g. @sanjay.storetransform@gmail.com)
+    email_matches = re.findall(r'@([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
+    
+    # 2. Match names (e.g. @Sanjay_Thakar or @Sanjay)
+    name_matches = re.findall(r'@([A-Za-z0-9_\-\.]+)', text)
+    
+    matched_user_ids = set()
+    
+    # Try to match emails
+    if email_matches:
+        users = db.query(models.User).filter(
+            models.User.email.in_(email_matches),
+            models.User.is_active == True,
+            models.User.email != "googlecloudcron@manhattancomfort.com"
+        ).all()
+        for u in users:
+            matched_user_ids.add(u.id)
+            
+    # Try to match names/usernames
+    if name_matches:
+        users = db.query(models.User).filter(
+            models.User.is_active == True,
+            models.User.email != "googlecloudcron@manhattancomfort.com"
+        ).all()
+        for match in name_matches:
+            match_clean = match.lower().replace("_", " ")
+            for u in users:
+                full_name = (u.full_name or "").lower()
+                first_name = (u.first_name or "").lower()
+                if full_name and match_clean in full_name:
+                    matched_user_ids.add(u.id)
+                elif first_name and match_clean in first_name:
+                    matched_user_ids.add(u.id)
+                    
+    if not matched_user_ids:
+        return []
+        
+    return db.query(models.User).filter(models.User.id.in_(list(matched_user_ids))).all()
+
+
 # ---------------------------------------------------------------------------
 # PUT /containers/{container_id}
 # ---------------------------------------------------------------------------
@@ -623,6 +704,8 @@ async def update_container(
     container_data: Optional[str] = Form(None),
     files: List[UploadFile] = File(default=[])
 ):
+    if current_user.role == "vendor":
+        raise HTTPException(status_code=403, detail="Vendors cannot update container details")
     import json
     if container_data:
         try:
@@ -681,21 +764,26 @@ async def update_container(
     update_dict = update_data.model_dump(exclude_unset=True)
     lifecycle_fields = [
         "date_dropped_off", "door", "date_emptied", "unloaded_by", 
-        "unload_cost", "drayage_cost", "customs_duty_misc", 
-        "per_diem", "country_of_origin", "receiving_closure_notes", 
-        "factory_credit_needed", "trucker_email"
+        "unload_cost", "container_shipping_cost", "drayage_cost", "customs_duty_misc", 
+        "per_diem", "country_of_origin", "trucker_email", "trucking_company",
+        "logistics_company_id"
     ]
     for field in lifecycle_fields:
         if field in update_dict:
             new_val = update_dict[field]
             old_val = getattr(container, field)
             
-            if isinstance(old_val, datetime):
+            import uuid
+            if isinstance(old_val, uuid.UUID):
+                old_val_str = str(old_val)
+            elif isinstance(old_val, datetime):
                 old_val_str = old_val.isoformat()
             else:
                 old_val_str = old_val
                 
-            if isinstance(new_val, datetime):
+            if isinstance(new_val, uuid.UUID):
+                new_val_str = str(new_val)
+            elif isinstance(new_val, datetime):
                 new_val_str = new_val.isoformat()
             else:
                 new_val_str = new_val
@@ -743,29 +831,56 @@ async def update_container(
             db.add(att_model)
             uploaded_attachments.append(att_model)
 
+    # Explicitly load logistics company relationship if ID is present
+    if container.logistics_company_id and not container.logistics_company:
+        container.logistics_company = db.query(models.LogisticsCompany).filter(models.LogisticsCompany.id == container.logistics_company_id).first()
+
+    # Auto-populate trucker_email if it's empty but we have a logistics company primary email
+    if not container.trucker_email and container.logistics_company and container.logistics_company.primary_email:
+        container.trucker_email = container.logistics_company.primary_email
+
     container.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(container)
 
     # Email notification logic
-    if container.date_emptied and container.trucker_email and container.trucker_email != container.last_notified_trucker_email:
-        from app.services.email_service import send_container_emptied_notification
-        formatted_date = container.date_emptied.strftime('%Y-%m-%d')
-        
-        users_to_notify = db.query(models.User).filter(models.User.notify_trucker_email == True).all()
-        cc_emails = [u.email for u in users_to_notify if u.email]
-        
-        background_tasks.add_task(
-            send_container_emptied_notification,
-            email_to=container.trucker_email,
-            container_name=container.container_name,
-            date_emptied=formatted_date,
-            door_name=container.door,
-            cc_emails=cc_emails
-        )
-        container.last_notified_trucker_email = container.trucker_email
-        db.commit()
+    if container.date_emptied:
+        email_to = None
+        if container.logistics_company and container.logistics_company.primary_email:
+            email_to = container.logistics_company.primary_email
+        else:
+            email_to = container.trucker_email
 
+        if email_to and email_to != container.last_notified_trucker_email:
+            from app.services.email_service import send_container_emptied_notification
+            formatted_date = container.date_emptied.strftime('%Y-%m-%d')
+            formatted_dropped_date = container.date_dropped_off.strftime('%Y-%m-%d') if container.date_dropped_off else None
+            
+            # Base CC list: Internal CRM users who enabled notifications
+            users_to_notify = db.query(models.User).filter(models.User.notify_trucker_email == True).all()
+            cc_emails = [u.email for u in users_to_notify if u.email]
+            
+            # Append Logistics Company CC emails if present
+            if container.logistics_company and container.logistics_company.cc_email:
+                # cc_email can be comma-separated, split and clean
+                extra_ccs = [email.strip() for email in container.logistics_company.cc_email.split(',') if email.strip()]
+                for email in extra_ccs:
+                    if email not in cc_emails:
+                        cc_emails.append(email)
+            
+            background_tasks.add_task(
+                send_container_emptied_notification,
+                email_to=email_to,
+                container_name=container.container_name,
+                date_emptied=formatted_date,
+                door_name=container.door,
+                date_dropped_off=formatted_dropped_date,
+                cc_emails=cc_emails
+            )
+            container.last_notified_trucker_email = email_to
+            db.commit()
+
+    # Legacy tag notifications on save container removed (transitioned to threaded comments)
     details_payload = update_data.model_dump(mode='json', exclude_unset=True)
     if changes:
         details_payload["changes"] = changes
@@ -781,6 +896,21 @@ async def update_container(
             "estimated_arrival_date": container.estimated_arrival_date,
             "received_date": container.received_date,
             "sellercloud_container_id": container.sellercloud_container_id,
+            "date_dropped_off": container.date_dropped_off,
+            "door": container.door,
+            "trucker_email": container.trucker_email,
+            "trucking_company": container.trucking_company,
+            "logistics_company_id": str(container.logistics_company_id) if container.logistics_company_id else None,
+            "date_emptied": container.date_emptied,
+            "unloaded_by": container.unloaded_by,
+            "unload_cost": float(container.unload_cost) if container.unload_cost is not None else None,
+            "container_shipping_cost": float(container.container_shipping_cost) if container.container_shipping_cost is not None else None,
+            "drayage_cost": float(container.drayage_cost) if container.drayage_cost is not None else None,
+            "customs_duty_misc": float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
+            "per_diem": float(container.per_diem) if container.per_diem is not None else None,
+            "country_of_origin": container.country_of_origin,
+            "receiving_closure_notes": container.receiving_closure_notes,
+            "factory_credit_needed": container.factory_credit_needed,
             "attachments": [
                 {
                     "id": str(att.id),
@@ -1056,6 +1186,7 @@ def get_container_activities(
 def get_container_details(
     container_id: str,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Full detail for one container.
@@ -1076,12 +1207,30 @@ def get_container_details(
             .joinedload(models.PurchaseOrderItem.purchase_order)
             .joinedload(models.PurchaseOrder.vendor),
             joinedload(models.ShippingContainer.attachments),
-            joinedload(models.ShippingContainer.warehouse)
+            joinedload(models.ShippingContainer.warehouse),
+            joinedload(models.ShippingContainer.logistics_company),
+            joinedload(models.ShippingContainer.comments)
+            .joinedload(models.ShippingContainerComment.user),
+            joinedload(models.ShippingContainer.comments)
+            .joinedload(models.ShippingContainerComment.attachments)
         )
         .first()
     )
     if not container:
         raise HTTPException(status_code=404, detail="Container not found")
+
+    if current_user.role == "vendor":
+        is_authorized = db.query(
+            db.query(models.PurchaseOrderItemContainer)
+            .join(models.PurchaseOrderItem)
+            .join(models.PurchaseOrder)
+            .filter(
+                models.PurchaseOrderItemContainer.shipping_container_id == container.id,
+                models.PurchaseOrder.vendor_id == current_user.vendor_id
+            ).exists()
+        ).scalar()
+        if not is_authorized:
+            raise HTTPException(status_code=403, detail="Not authorized to view details for this container")
 
     items_out = []
     for link in container.item_links:
@@ -1115,6 +1264,14 @@ def get_container_details(
     )
     fully_received_count = sum(1 for i in items_out if i.is_fully_received)
 
+    # Map user names for container comments
+    for comment in container.comments:
+        if comment.user:
+            comment.user_name = comment.user.full_name or comment.user.email
+
+    vendor_credit_comments = [c for c in container.comments if c.category == "vendor_credit"]
+    receiving_closure_comments = [c for c in container.comments if c.category == "receiving_closure"]
+
     return ContainerDetailOut(
         id=container.id,
         sellercloud_container_id=container.sellercloud_container_id,
@@ -1128,10 +1285,14 @@ def get_container_details(
         date_dropped_off=container.date_dropped_off,
         door=container.door,
         trucker_email=container.trucker_email,
+        trucking_company=container.trucking_company,
+        logistics_company_id=container.logistics_company_id,
+        logistics_company=container.logistics_company,
         date_emptied=container.date_emptied,
         unloaded_by=container.unloaded_by,
         unload_cost=float(container.unload_cost) if container.unload_cost is not None else None,
-        container_cost_drayage=float(container.drayage_cost) if container.drayage_cost is not None else None,
+        container_shipping_cost=float(container.container_shipping_cost) if container.container_shipping_cost is not None else None,
+        drayage_cost=float(container.drayage_cost) if container.drayage_cost is not None else None,
         customs_duty_misc=float(container.customs_duty_misc) if container.customs_duty_misc is not None else None,
         per_diem=float(container.per_diem) if container.per_diem is not None else None,
         country_of_origin=container.country_of_origin,
@@ -1147,6 +1308,8 @@ def get_container_details(
         },
         items=items_out,
         attachments=container.attachments,
+        vendor_credit_comments=vendor_credit_comments,
+        receiving_closure_comments=receiving_closure_comments
     )
 
 
@@ -2187,3 +2350,406 @@ def trigger_allways_sync_all(background_tasks: BackgroundTasks):
             
     background_tasks.add_task(background_sync_all_tracking)
     return {"success": True, "message": "AllWays container sync started in the background."}
+
+
+# ---------------------------------------------------------------------------
+# CONTAINER COMMENTS ENDPOINTS
+# ---------------------------------------------------------------------------
+
+@router.post("/{container_id}/comments", response_model=ShippingContainerCommentOut)
+async def add_container_comment(
+    container_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    comment: Optional[str] = Form(None),
+    category: str = Form(...), # 'vendor_credit' or 'receiving_closure'
+    parent_id: Optional[str] = Form(None),
+    tagged_user_ids: Optional[str] = Form(None),
+    files: list[UploadFile] = File([]),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    import uuid
+    import json
+    from app.config import settings
+    from app.services.gcs_service import upload_file_to_gcs
+
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    if current_user.role == "vendor":
+        is_authorized = db.query(
+            db.query(models.PurchaseOrderItemContainer)
+            .join(models.PurchaseOrderItem)
+            .join(models.PurchaseOrder)
+            .filter(
+                models.PurchaseOrderItemContainer.shipping_container_id == container.id,
+                models.PurchaseOrder.vendor_id == current_user.vendor_id
+            ).exists()
+        ).scalar()
+        if not is_authorized:
+            raise HTTPException(status_code=403, detail="Not authorized to view details for this container")
+
+    if not comment:
+        try:
+            body = await request.json()
+            comment = body.get("comment")
+            category = body.get("category", category)
+            parent_id = body.get("parent_id")
+            tagged_users_list = body.get("tagged_user_ids", [])
+            if isinstance(tagged_users_list, list):
+                tagged_user_ids = json.dumps(tagged_users_list)
+            else:
+                tagged_user_ids = str(tagged_users_list)
+        except Exception:
+            pass
+
+    if not comment:
+        if files:
+            comment = ""
+        else:
+            raise HTTPException(status_code=400, detail="comment field is required")
+
+    try:
+        if not tagged_user_ids or tagged_user_ids == "null":
+            tagged_users = []
+        else:
+            tagged_users = json.loads(tagged_user_ids)
+            if not isinstance(tagged_users, list):
+                tagged_users = [tagged_users]
+    except Exception:
+        tagged_users = [uid.strip() for uid in tagged_user_ids.split(",") if uid.strip()]
+
+    if parent_id == "null" or not parent_id:
+        parent_uuid = None
+    else:
+        try:
+            parent_uuid = uuid.UUID(parent_id)
+        except ValueError:
+            parent_uuid = None
+
+    new_comment = models.ShippingContainerComment(
+        shipping_container_id=container.id,
+        user_id=current_user.id,
+        comment=comment,
+        category=category,
+        parent_id=parent_uuid
+    )
+    db.add(new_comment)
+    db.flush()
+    db.refresh(new_comment)
+    new_comment.user_name = current_user.full_name or current_user.email
+    
+    uploaded_attachments = []
+    email_attachments = []
+    
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, Excel docs, and CSVs are permitted.")
+            
+    for f in files:
+        if not f.filename:
+            continue
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.ShippingContainerCommentAttachment(
+            comment_id=new_comment.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        email_attachments.append({
+            "file_name": f.filename,
+            "content": file_bytes,
+            "content_type": f.content_type
+        })
+        
+    db.commit()
+    db.refresh(new_comment)
+    
+    # Process Tags and Mentions
+    section_name = "Vendor Credit Needed" if category == "vendor_credit" else "Receiving Closure Notes"
+    link = f"{settings.FRONTEND_ORIGIN}/containers/{container.id}?comment_id={new_comment.id}"
+    
+    await process_container_comment_tags(
+        db=db,
+        tagged_user_ids=tagged_users,
+        commenter_name=new_comment.user_name,
+        link=link,
+        background_tasks=background_tasks,
+        is_edit=False,
+        section=section_name,
+        container_name=container.container_name,
+        comment_text=new_comment.comment,
+        attachments=email_attachments
+    )
+    
+    log_activity(db, action="ADD_CONTAINER_COMMENT", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id), details={"comment_id": str(new_comment.id), "category": category})
+    return new_comment
+
+
+@router.put("/comments/{comment_id}", response_model=ShippingContainerCommentOut)
+async def update_container_comment(
+    comment_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    comment_text: Optional[str] = Form(None, alias="comment"),
+    tagged_user_ids: Optional[str] = Form(None),
+    files: list[UploadFile] = File([]),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    import uuid
+    import json
+    from app.config import settings
+    from app.services.gcs_service import upload_file_to_gcs
+
+    comment = db.query(models.ShippingContainerComment).filter(models.ShippingContainerComment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this comment")
+        
+    container = comment.container
+    if comment_text is not None:
+        comment.comment = comment_text
+        comment.is_edited = True
+        
+    tagged_users = []
+    if tagged_user_ids:
+        try:
+            tagged_users = json.loads(tagged_user_ids)
+            if not isinstance(tagged_users, list):
+                tagged_users = [tagged_users]
+        except Exception:
+            tagged_users = [uid.strip() for uid in tagged_user_ids.split(",") if uid.strip()]
+            
+    uploaded_attachments = []
+    email_attachments = []
+    
+    allowed_types = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv"
+    ]
+    
+    for f in files:
+        if f.size and f.size > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+        if f.filename and f.content_type:
+            if not f.content_type.startswith('image/') and f.content_type not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"File type not allowed for {f.filename}. Only images, PDFs, Word docs, Excel docs, and CSVs are permitted.")
+                
+    for f in files:
+        if not f.filename:
+            continue
+        file_bytes = await f.read()
+        if len(file_bytes) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File {f.filename} exceeds 5MB limit.")
+            
+        file_url = await upload_file_to_gcs(file_bytes, f.filename, f.content_type)
+        
+        att_model = models.ShippingContainerCommentAttachment(
+            comment_id=comment.id,
+            file_name=f.filename,
+            file_url=file_url,
+            content_type=f.content_type,
+            size=len(file_bytes)
+        )
+        db.add(att_model)
+        uploaded_attachments.append(att_model)
+        email_attachments.append({
+            "file_name": f.filename,
+            "content": file_bytes,
+            "content_type": f.content_type
+        })
+        
+    db.commit()
+    db.refresh(comment)
+    comment.user_name = current_user.full_name or current_user.email
+    
+    # Process Tags
+    section_name = "Vendor Credit Needed" if comment.category == "vendor_credit" else "Receiving Closure Notes"
+    link = f"{settings.FRONTEND_ORIGIN}/containers/{container.id}?comment_id={comment.id}"
+    
+    await process_container_comment_tags(
+        db=db,
+        tagged_user_ids=tagged_users,
+        commenter_name=comment.user_name,
+        link=link,
+        background_tasks=background_tasks,
+        is_edit=True,
+        section=section_name,
+        container_name=container.container_name if container else None,
+        comment_text=comment.comment,
+        attachments=email_attachments
+    )
+    
+    log_activity(db, action="UPDATE_CONTAINER_COMMENT", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id) if container else None, details={"comment_id": comment_id})
+    return comment
+
+
+@router.delete("/comments/{comment_id}")
+def delete_container_comment(
+    comment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    comment = db.query(models.ShippingContainerComment).filter(models.ShippingContainerComment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+        
+    container = comment.container
+    from app.services.gcs_service import delete_file_from_gcs
+    for attachment in comment.attachments:
+        if attachment.file_url:
+            background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+            
+    db.delete(comment)
+    db.commit()
+    
+    log_activity(db, action="DELETE_CONTAINER_COMMENT", user_id=current_user.id, entity_type="CONTAINER", entity_id=str(container.id) if container else None, details={"comment_id": comment_id})
+    return {"success": True, "message": "Comment deleted successfully"}
+
+
+@router.delete("/comments/attachments/{attachment_id}")
+def delete_container_comment_attachment(
+    attachment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    attachment = db.query(models.ShippingContainerCommentAttachment).filter(models.ShippingContainerCommentAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+        
+    comment = attachment.comment
+    if comment and comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this attachment")
+        
+    from app.services.gcs_service import delete_file_from_gcs
+    if attachment.file_url:
+        background_tasks.add_task(delete_file_from_gcs, attachment.file_url)
+        
+    db.delete(attachment)
+    db.commit()
+    
+    return {"success": True, "message": "Attachment deleted successfully"}
+
+
+@router.get("/{container_id}/comments", response_model=List[ShippingContainerCommentOut])
+def get_container_comments(
+    container_id: str,
+    category: Optional[str] = Query(None, description="Filter comments by category: 'vendor_credit' or 'receiving_closure'"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    if current_user.role == "vendor":
+        is_authorized = db.query(
+            db.query(models.PurchaseOrderItemContainer)
+            .join(models.PurchaseOrderItem)
+            .join(models.PurchaseOrder)
+            .filter(
+                models.PurchaseOrderItemContainer.shipping_container_id == container.id,
+                models.PurchaseOrder.vendor_id == current_user.vendor_id
+            ).exists()
+        ).scalar()
+        if not is_authorized:
+            raise HTTPException(status_code=403, detail="Not authorized to view comments for this container")
+
+    query = db.query(models.ShippingContainerComment).filter(
+        models.ShippingContainerComment.shipping_container_id == container.id
+    )
+
+    if category:
+        query = query.filter(models.ShippingContainerComment.category == category)
+
+    comments = query.options(
+        joinedload(models.ShippingContainerComment.user),
+        joinedload(models.ShippingContainerComment.attachments)
+    ).order_by(models.ShippingContainerComment.created_at.asc()).all()
+
+    for comment in comments:
+        if comment.user:
+            comment.user_name = comment.user.full_name or comment.user.email
+
+    return comments
+
+
+async def process_container_comment_tags(
+    db, tagged_user_ids, commenter_name, link, background_tasks, 
+    is_edit=False, section="Containers", container_name=None, 
+    comment_text="", attachments=None
+):
+    import app.models as models
+    import re
+    from app.services.email_service import send_tag_notification
+    
+    explicit_ids = set()
+    if tagged_user_ids:
+        found_uuids = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', str(tagged_user_ids))
+        explicit_ids.update(found_uuids)
+
+    if comment_text:
+        matches = re.findall(r'@([A-Za-z0-9_\-\.]+)', comment_text)
+        if matches:
+            users = db.query(models.User).all()
+            for match in matches:
+                match_clean = match.lower().replace("_", " ")
+                for user in users:
+                    full_name = (user.full_name or "").lower()
+                    first_name = (user.first_name or "").lower()
+                    if full_name and match_clean in full_name:
+                        explicit_ids.add(str(user.id))
+                    elif first_name and match_clean in first_name:
+                        explicit_ids.add(str(user.id))
+
+    if not explicit_ids:
+        return
+        
+    users = db.query(models.User).filter(models.User.id.in_(list(explicit_ids))).all()
+    emails = [u.email for u in users if u.email]
+    if emails:
+        background_tasks.add_task(
+            send_tag_notification, 
+            emails=emails, 
+            commenter_name=commenter_name, 
+            link=link, 
+            is_edit=is_edit, 
+            section=section,
+            po_number=None,
+            sku=None,
+            comment_text=comment_text,
+            attachments=attachments,
+            container_name=container_name
+        )

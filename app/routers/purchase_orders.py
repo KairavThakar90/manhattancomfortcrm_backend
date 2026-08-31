@@ -402,7 +402,8 @@ def list_purchase_orders(
         subq = db.query(
             models.PurchaseOrderItem.purchase_order_id,
             func.sum(models.PurchaseOrderItem.qty_ordered).label('tot_ord'),
-            func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec')
+            func.sum(models.PurchaseOrderItem.qty_received).label('tot_rec'),
+            func.sum(models.PurchaseOrderItem.qty_in_container).label('tot_in_container')
         ).group_by(models.PurchaseOrderItem.purchase_order_id).subquery()
         
         q = q.outerjoin(subq, models.PurchaseOrder.id == subq.c.purchase_order_id)
@@ -421,19 +422,26 @@ def list_purchase_orders(
         if status == "SHIPPED":
             q = q.filter(
                 func.coalesce(subq.c.tot_ord, 0) > 0,
-                func.coalesce(subq.c.tot_rec, 0) >= func.coalesce(subq.c.tot_ord, 0)
+                func.coalesce(subq.c.tot_in_container, 0) >= func.coalesce(subq.c.tot_ord, 0)
             )
         elif status == "PARTIALLY_SHIPPED":
             q = q.filter(
                 func.coalesce(subq.c.tot_ord, 0) > 0,
-                func.coalesce(subq.c.tot_rec, 0) > 0,
-                func.coalesce(subq.c.tot_rec, 0) < func.coalesce(subq.c.tot_ord, 0)
+                func.coalesce(subq.c.tot_in_container, 0) > 0,
+                func.coalesce(subq.c.tot_in_container, 0) < func.coalesce(subq.c.tot_ord, 0)
+            )
+        elif status == "NOT_STARTED":
+            q = q.filter(
+                (models.PurchaseOrder.status == "NOT_STARTED") | (models.PurchaseOrder.status.is_(None)),
+                # Either no items are in container, or the status is explicitly set to NOT_STARTED in DB
+                (func.coalesce(subq.c.tot_in_container, 0) == 0) | (func.lower(models.PurchaseOrder.status) == "not_started")
             )
         elif status is not None:
-            # For other statuses (e.g. IN_PRODUCTION), only match if not overridden by dynamic logic
+            # For other statuses (e.g. IN_PRODUCTION, DELAYED), only exclude them if fully shipped (dynamic SHIPPED override)
             q = q.filter(
-                models.PurchaseOrder.status == status,
-                func.coalesce(subq.c.tot_rec, 0) == 0
+                func.lower(models.PurchaseOrder.status) == status.lower(),
+                (func.coalesce(subq.c.tot_in_container, 0) < func.coalesce(subq.c.tot_ord, 0)) |
+                (func.coalesce(subq.c.tot_ord, 0) == 0)
             )
     
     
@@ -488,10 +496,10 @@ def list_purchase_orders(
         
     if approved_status:
         cutoff_10_days = datetime.utcnow() - timedelta(days=10)
-        status_val = approved_status.strip().lower()
-        if status_val == "ontime":
+        status_val = approved_status.strip().lower().replace(" ", "")
+        if status_val in ("ontime", "ontimes"):
             q = q.filter(models.PurchaseOrder.invoice_date.isnot(None))
-        elif status_val == "delayed":
+        elif status_val in ("delayed", "delay"):
             q = q.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.is_(None),
@@ -2135,17 +2143,20 @@ def update_po_status(
         db.refresh(po)
         log_activity(db, action="UPDATE_PO_STATUS", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes})
         
-        # Send email notification if vendor made the change
-        if current_user.role == "vendor":
+        # Send email notification if vendor or admin made the change
+        if current_user.role in ("vendor", "admin"):
             from app.services.email_service import send_po_status_update_email
-            vendor_name = po.vendor.name if po.vendor else "Unknown Vendor"
+            updater_name = current_user.full_name or current_user.email
+            if current_user.role == "vendor" and po.vendor:
+                updater_name = po.vendor.name
             background_tasks.add_task(
                 send_po_status_update_email,
                 db=db,
                 po_number=str(po.sellercloud_po_id),
                 old_status=old_status,
                 new_status=po.status,
-                vendor_name=vendor_name
+                updater_name=updater_name,
+                updater_role=current_user.role
             )
             
     return po
@@ -2529,6 +2540,139 @@ def trigger_single_po_sync(
         }
 
 
+@router.post("/{sellercloud_po_id}/sync-all")
+def trigger_full_po_sync(
+    sellercloud_po_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Full sync for a specific purchase order.
+    1. Syncs PO details and items from SellerCloud.
+    2. Syncs/resolves containers and links for all its items.
+    """
+    from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items, _get_or_create_warehouse, sync_containers
+    from app.services.sellercloud_client import sellercloud_client
+    from app.services.activity_service import log_activity
+    
+    try:
+        # Step 1: Sync PO Details and Items
+        detail = sellercloud_client.get_purchase_order_detail(sellercloud_po_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail=f"PO {sellercloud_po_id} not found in SellerCloud")
+        
+        mapped = _map_po(detail)
+        purchase = detail.get("Purchase") or {}
+        company_sc_id = purchase.get("CompanyId")
+        vendor_sc_id = purchase.get("VendorId")
+        
+        company = _get_or_create_company(db, company_sc_id)
+        vendor = _get_or_create_vendor(db, vendor_sc_id)
+        
+        warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
+        warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
+        
+        from app.services.sync_service import _extract_order_info_from_po_detail, _get_or_create_channel
+        order_info = _extract_order_info_from_po_detail(db, detail)
+        customer_id = order_info["customer_id"]
+        channel_order_id = order_info["channel_order_id"]
+        channel_id = order_info["channel_id"]
+        
+        if (not customer_id or not channel_order_id) and mapped.get("purchase_title"):
+            try:
+                import re
+                match = re.search(r"Created for Order#\s*(\d+)", mapped["purchase_title"])
+                if match:
+                    order_id = match.group(1)
+                    order_detail = sellercloud_client.get_order_detail(order_id)
+                    if order_detail:
+                        if not customer_id:
+                            customer_email = order_detail.get("CustomerEmail")
+                            if customer_email:
+                                from app.services.sync_service import _get_or_create_customer
+                                customer = _get_or_create_customer(db, {"CustomerEmail": customer_email})
+                                if customer:
+                                    customer_id = customer.id
+                        
+                        order_details_block = order_detail.get("OrderDetails", {})
+                        if not channel_order_id:
+                            channel_order_id = order_details_block.get("OrderSourceOrderId")
+                        if not channel_id:
+                            from app.services.sync_service import _get_channel_name_from_order
+                            channel_name = _get_channel_name_from_order(order_detail)
+                            if channel_name and channel_name != "Unknown":
+                                channel = _get_or_create_channel(db, channel_name)
+                                if channel:
+                                    channel_id = channel.id
+            except Exception as e:
+                print(f"Fallback order fetch failed for PO {sellercloud_po_id}: {e}")
+
+        existing_po = (
+            db.query(models.PurchaseOrder)
+            .filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id)
+            .first()
+        )
+        
+        if existing_po:
+            for key, val in mapped.items():
+                setattr(existing_po, key, val)
+            existing_po.company_id = company.id if company else None
+            existing_po.vendor_id = vendor.id if vendor else None
+            existing_po.warehouse_id = warehouse.id if warehouse else None
+            if customer_id:
+                existing_po.customer_id = customer_id
+            if channel_order_id:
+                existing_po.channel_order_id = channel_order_id
+            if channel_id:
+                existing_po.channel_id = channel_id
+            po_row = existing_po
+        else:
+            po_row = models.PurchaseOrder(
+                **mapped,
+                company_id=company.id if company else None,
+                vendor_id=vendor.id if vendor else None,
+                warehouse_id=warehouse.id if warehouse else None,
+                customer_id=customer_id,
+                channel_order_id=channel_order_id,
+                channel_id=channel_id
+            )
+            db.add(po_row)
+        
+        db.flush()
+        items = detail.get("Items") or []
+        _upsert_items(db, po_row.id, items)
+        db.commit()
+        
+        # Step 2: Sync Containers and Link Items
+        container_result = sync_containers(db, po_id=sellercloud_po_id)
+        
+        log_activity(db, action="SYNC_PO_FULL", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(sellercloud_po_id))
+        
+        return {
+            "success": True,
+            "sellercloud_po_id": sellercloud_po_id,
+            "status": "success",
+            "message": f"Successfully performed full sync (PO + Containers) for PO {sellercloud_po_id}",
+            "items_count": len(items),
+            "containers_synced": container_result.get("containers_synced", 0),
+            "links_synced": container_result.get("links_synced", 0)
+        }
+        
+    except HTTPException as e:
+        return {
+            "success": False,
+            "message": "PO not found",
+            "error": str(e.detail)
+        }
+    except Exception as e:
+        db.rollback()
+        return {
+            "success": False,
+            "message": "Error performing full sync",
+            "error": str(e)
+        }
+
+
 @router.post("/sync-containers")
 def trigger_all_containers_sync(
     days: int = Query(30, description="Sync containers for POs from last N days (default: 30)"),
@@ -2680,16 +2824,16 @@ def export_single_po_csv(
     writer.writerow(["Channel Order ID", po.channel_order_id or ""])
     writer.writerow(["Status Code", po.purchase_order_status_code or ""])
     writer.writerow(["Receiving Status", po.receiving_status_code or ""])
-    writer.writerow(["Created On", po.created_on.isoformat() if po.created_on else ""])
-    writer.writerow(["Date Ordered", po.date_ordered.isoformat() if po.date_ordered else ""])
-    writer.writerow(["Expected Delivery", po.expected_delivery_date.isoformat() if po.expected_delivery_date else ""])
-    writer.writerow(["Invoice Date", po.invoice_date.isoformat() if po.invoice_date else ""])
+    writer.writerow(["Created On", po.created_on.strftime('%Y-%m-%d') if po.created_on else ""])
+    writer.writerow(["Date Ordered", po.date_ordered.strftime('%Y-%m-%d') if po.date_ordered else ""])
+    writer.writerow(["Expected Delivery", po.expected_delivery_date.strftime('%Y-%m-%d') if po.expected_delivery_date else ""])
+    writer.writerow(["Invoice Date", po.invoice_date.strftime('%Y-%m-%d') if po.invoice_date else ""])
     lead_time = po.container_lead_time_days if po.container_lead_time_days is not None else (po.vendor.container_lead_time_days if po.vendor else "")
     writer.writerow(["Lead Time (days)", lead_time])
     writer.writerow(["Total Amount", f"{po.total_amount or 0} {po.currency or 'USD'}"])
     writer.writerow(["Notes", po.notes or ""])
     comments_str = " | ".join(
-        [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
+        [f"[{c.created_at.strftime('%Y-%m-%d')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
     ) if getattr(po, "comments", None) else ""
     writer.writerow(["Comments", comments_str])
     writer.writerow([])  # Empty row
@@ -2712,7 +2856,7 @@ def export_single_po_csv(
             if containers:
                 container_name = ", ".join([c.container_name or "" for c in containers])
                 container_eta = ", ".join([
-                    c.estimated_arrival_date.isoformat() if c.estimated_arrival_date else ""
+                    c.estimated_arrival_date.strftime('%Y-%m-%d') if c.estimated_arrival_date else ""
                     for c in containers
                 ])
         
@@ -2727,7 +2871,7 @@ def export_single_po_csv(
             item.qty_cases_ordered or 0,
             item.qty_units_per_case or 0,
             item.case_price or 0,
-            item.expected_delivery_date.isoformat() if item.expected_delivery_date else "",
+            item.expected_delivery_date.strftime('%Y-%m-%d') if item.expected_delivery_date else "",
             container_name,
             container_eta
         ])
@@ -2889,7 +3033,7 @@ def export_multiple_pos_csv(
     def container_info_of(item):
         containers = [link.container for link in (item.container_links or []) if link.container]
         name = ", ".join([c.container_name or "" for c in containers])
-        eta = ", ".join([c.estimated_arrival_date.isoformat() if c.estimated_arrival_date else "" for c in containers])
+        eta = ", ".join([c.estimated_arrival_date.strftime('%Y-%m-%d') if getattr(c, 'estimated_arrival_date', None) else "" for c in containers])
         return name, eta
 
     # column name -> (is_item_level, extractor(po, item))
@@ -2899,13 +3043,15 @@ def export_multiple_pos_csv(
         "Vendor": (False, lambda po, item: po.vendor.name if po.vendor else ""),
         "Customer Name": (False, lambda po, item: f"{po.customer.first_name or ''} {po.customer.last_name or ''}".strip() if po.customer else ""),
         "Channel": (False, lambda po, item: po.channel.name if po.channel else ""),
+        "Channel ID": (False, lambda po, item: po.channel_order_id or ""),
         "Channel Order ID": (False, lambda po, item: po.channel_order_id or ""),
+        "Warehouse": (False, lambda po, item: po.warehouse.name if po.warehouse else ""),
         "Status Code": (False, lambda po, item: po.purchase_order_status_code or ""),
         "Receiving Status": (False, lambda po, item: po.receiving_status_code or ""),
-        "Created On": (False, lambda po, item: po.created_on.isoformat() if po.created_on else ""),
-        "Date Ordered": (False, lambda po, item: po.date_ordered.isoformat() if po.date_ordered else ""),
-        "Expected Delivery": (False, lambda po, item: po.expected_delivery_date.isoformat() if po.expected_delivery_date else ""),
-        "Invoice Date": (False, lambda po, item: po.invoice_date.isoformat() if po.invoice_date else ""),
+        "Created On": (False, lambda po, item: po.created_on.strftime('%Y-%m-%d') if po.created_on else ""),
+        "Date Ordered": (False, lambda po, item: po.date_ordered.strftime('%Y-%m-%d') if po.date_ordered else ""),
+        "Expected Delivery": (False, lambda po, item: po.expected_delivery_date.strftime('%Y-%m-%d') if po.expected_delivery_date else ""),
+        "Invoice Date": (False, lambda po, item: po.invoice_date.strftime('%Y-%m-%d') if po.invoice_date else ""),
         "Lead Time (days)": (False, lambda po, item: lead_time_of(po)),
         "Total Amount": (False, lambda po, item: po.total_amount or 0),
         "Currency": (False, lambda po, item: po.currency or "USD"),
@@ -2919,7 +3065,7 @@ def export_multiple_pos_csv(
         "Cases Ordered": (True, lambda po, item: item.qty_cases_ordered or 0),
         "Units per Case": (True, lambda po, item: item.qty_units_per_case or 0),
         "Case Price": (True, lambda po, item: item.case_price or 0),
-        "Item Expected Delivery": (True, lambda po, item: item.expected_delivery_date.isoformat() if item.expected_delivery_date else ""),
+        "Item Expected Delivery": (True, lambda po, item: item.expected_delivery_date.strftime('%Y-%m-%d') if item.expected_delivery_date else ""),
         "Container Name": (True, lambda po, item: container_info_of(item)[0]),
         "Container ETA": (True, lambda po, item: container_info_of(item)[1]),
         "Notes": (False, lambda po, item: po.notes or ""),
@@ -3028,6 +3174,36 @@ def sync_pos_optimized(
             "message": "Sync failed or partially failed",
             "error": result.get("error"),
             "errors": result.get("errors", []),
+            "data": result.get("stats", {})
+        }
+
+
+@router.post("/sync/cleanup-deleted")
+def cleanup_deleted_pos(db: Session = Depends(get_db)):
+    """
+    **DEEP CLEANUP** - Removes Hard-Deleted POs and Empty Containers.
+    
+    Checks every PO in the local database against SellerCloud to find any that 
+    have been completely deleted from SellerCloud. If a PO is deleted, it is 
+    removed from the CRM along with its line items. Any shipping containers 
+    that become completely empty as a result are also deleted.
+    
+    This is a slower operation and should only be run periodically (e.g. weekly).
+    """
+    sync_service = OptimizedSyncService(db)
+    result = sync_service.cleanup_deleted_pos()
+    
+    if result.get("success"):
+        return {
+            "success": True,
+            "message": result.get("message"),
+            "data": result.get("stats", {})
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Cleanup failed",
+            "error": result.get("error"),
             "data": result.get("stats", {})
         }
 

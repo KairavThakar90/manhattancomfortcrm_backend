@@ -22,8 +22,28 @@ class OptimizedSyncService:
     def __init__(self, db: Session):
         self.db = db
         self.client = SellerCloudClient()
+
+    def _cleanup_po_if_exists(self, po_id: int) -> bool:
+        """Helper to delete a PO and its empty containers if it was cancelled/deleted in SC."""
+        from app.models import PurchaseOrder, ShippingContainer
+        po = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id == po_id).first()
+        if po:
+            self.db.delete(po)
+            self.db.commit()
+            
+            # Clean up completely empty containers
+            empty_containers = self.db.query(ShippingContainer).filter(
+                ~ShippingContainer.item_links.any()
+            ).all()
+            for c in empty_containers:
+                self.db.delete(c)
+            self.db.commit()
+            
+            print(f"[OptimizedSync] Deleted PO {po_id} and cleaned up empty containers.")
+            return True
+        return False
     
-    def sync_recent_pos(self, days: int = 7, batch_size: int = 25, view_id: int = None):
+    def sync_recent_pos(self, days: int = 7, batch_size: int = 25, view_id: int = None) -> dict:
         """
         Sync only POs modified in the last N days (default: 7).
         
@@ -56,47 +76,49 @@ class OptimizedSyncService:
             "items_synced": 0,
             "api_calls": 0
         }
+        synced_po_ids = []
         
         try:
-            # Step 1: Fetch PO list from view (lightweight, just IDs and basic info)
+            # Step 1: Fetch POs only from the specified view (default: 25) and filter by date
             page = 1
             po_ids_to_sync = []
+            target_view_id = view_id or 25
             
             while True:
                 stats["api_calls"] += 1
-                
-                # Use the working GetAllByView endpoint
                 response = self.client.get_purchase_orders_by_view(
-                    view_id=view_id or 25,
+                    view_id=target_view_id,
                     page_number=page,
-                    page_size=batch_size
+                    page_size=100
                 )
-                
                 items = response.get("Items", [])
                 if not items:
                     break
                 
-                # Filter by date locally (check CreatedOn or UpdatedOn)
                 for po in items:
-                    created_on_str = po.get("CreatedOn")
-                    if created_on_str:
+                    po_id = po.get("ID")
+                    if not po_id:
+                        continue
+                    
+                    # Parse revised or created date
+                    date_raw = po.get("LastRevisedOn") or po.get("CreatedOn")
+                    if date_raw:
                         try:
-                            created_on = datetime.fromisoformat(created_on_str.replace("Z", "+00:00"))
-                            # Only sync POs created in the last N days
-                            if created_on >= cutoff_date:
-                                po_ids_to_sync.append(po.get("ID"))
-                        except:
-                            # If date parsing fails, include it to be safe
-                            po_ids_to_sync.append(po.get("ID"))
+                            clean_date = date_raw.split(".")[0].replace("Z", "")
+                            po_date = datetime.fromisoformat(clean_date).replace(tzinfo=timezone.utc)
+                            if po_date >= cutoff_date:
+                                po_ids_to_sync.append(po_id)
+                        except ValueError:
+                            po_ids_to_sync.append(po_id)
                     else:
-                        # No date, include it
-                        po_ids_to_sync.append(po.get("ID"))
+                        po_ids_to_sync.append(po_id)
                 
-                # Check if more pages
-                if len(items) < batch_size:
+                if len(items) < 100:
                     break
-                
                 page += 1
+            
+            # Remove duplicates just in case
+            po_ids_to_sync = list(set(po_ids_to_sync))
             
             errors = []
             
@@ -109,15 +131,29 @@ class OptimizedSyncService:
                     stats["api_calls"] += 1
                     stats["pos_fetched"] += 1
                     
-                    # Fetch full PO detail (includes Items with QtyInContainer)
-                    detail = self.client.get_purchase_order(po_id)
+                    try:
+                        # Fetch full PO detail (includes Items with QtyInContainer)
+                        detail = self.client.get_purchase_order(po_id)
+                    except Exception as e:
+                        if "500" in str(e):
+                            # SellerCloud throws 500 when fetching a hard-deleted PO
+                            if self._cleanup_po_if_exists(po_id):
+                                stats["pos_skipped"] += 1 # technically deleted, but skipped from upsert
+                            continue
+                        raise e
+                    
+                    mapped = _map_po(detail)
+                    
+                    # If PO is Cancelled (Status 4), delete it locally
+                    if str(mapped.get("purchase_order_status_code")) == "4":
+                        if self._cleanup_po_if_exists(po_id):
+                            stats["pos_skipped"] += 1
+                        continue
                     
                     # Map and get related entities
                     purchase = detail.get("Purchase") or {}
                     vendor = _get_or_create_vendor(self.db, purchase.get("VendorId"))
                     company = _get_or_create_company(self.db, purchase.get("CompanyId"))
-                    
-                    mapped = _map_po(detail)
                     
                     warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
                     warehouse = _get_or_create_warehouse(self.db, warehouse_sc_id)
@@ -172,12 +208,16 @@ class OptimizedSyncService:
                             setattr(existing_po, k, v)
                         po = existing_po
                         stats["pos_updated"] += 1
+                        if po.sellercloud_po_id not in synced_po_ids:
+                            synced_po_ids.append(po.sellercloud_po_id)
                     else:
                         # Create new
                         po = models.PurchaseOrder(**mapped)
                         self.db.add(po)
                         self.db.flush()
                         stats["pos_created"] += 1
+                        if po.sellercloud_po_id not in synced_po_ids:
+                            synced_po_ids.append(po.sellercloud_po_id)
                     
                     # Sync items
                     line_items = detail.get("Items") or []
@@ -199,6 +239,7 @@ class OptimizedSyncService:
             return {
                 "success": len(errors) == 0 or (stats["pos_created"] + stats["pos_updated"]) > 0,
                 "stats": stats,
+                "synced_po_ids": synced_po_ids,
                 "errors": errors,
                 "cutoff_date": cutoff_date.isoformat(),
                 "days_synced": days,
@@ -246,10 +287,10 @@ class OptimizedSyncService:
             "pos_skipped": 0,
             "containers_synced": 0,
             "links_synced": 0,
-            "links_synced": 0,
             "bandwidth_saved": "~80-95%",
             "stopped_early": False
         }
+        all_synced_container_names = []
         
         import time
         start_time = time.time()
@@ -306,6 +347,11 @@ class OptimizedSyncService:
                     stats["containers_synced"] += result.get("containers_synced", 0)
                     stats["links_synced"] += result.get("links_synced", 0)
                     
+                    names = result.get("synced_container_names") or []
+                    for name in names:
+                        if name not in all_synced_container_names:
+                            all_synced_container_names.append(name)
+                    
                     # Progress logging every 10 POs
                     if idx % 10 == 0:
                         print(f"[OptimizedSync] Progress: {idx}/{len(pos)} POs checked, "
@@ -326,6 +372,7 @@ class OptimizedSyncService:
             return {
                 "success": len(errors) == 0 or stats["pos_processed"] > 0,
                 "stats": stats,
+                "synced_container_names": all_synced_container_names,
                 "errors": errors,
                 "cutoff_date": cutoff.isoformat(),
                 "days_synced": days,
@@ -367,8 +414,12 @@ class OptimizedSyncService:
             # If no specific POs, get recent POs (last 30 days)
             if not po_ids:
                 cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                from sqlalchemy import or_
                 recent_pos = self.db.query(models.PurchaseOrder).filter(
-                    models.PurchaseOrder.created_on >= cutoff
+                    or_(
+                        models.PurchaseOrder.created_on >= cutoff,
+                        models.PurchaseOrder.updated_at >= cutoff
+                    )
                 ).all()
                 po_ids = [po.sellercloud_po_id for po in recent_pos if po.sellercloud_po_id]
             
@@ -395,6 +446,97 @@ class OptimizedSyncService:
                 "stats": stats,
                 "errors": errors,
                 "message": f"Synced containers for {stats['pos_processed']} POs"
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            return {
+                "success": False,
+                "error": str(e),
+                "stats": stats
+            }
+
+    def cleanup_deleted_pos(self) -> dict:
+        """
+        Deep Cleanup for Hard-Deleted POs.
+        Fetches ALL valid PO IDs from SellerCloud using the default view,
+        compares against the local database, and deletes any local POs that
+        no longer exist in SellerCloud.
+        """
+        stats = {
+            "sc_pos_fetched": 0,
+            "local_pos_checked": 0,
+            "pos_deleted": 0,
+            "api_calls": 0,
+            "containers_cleaned": 0
+        }
+        
+        try:
+            # 1. Fetch all valid PO IDs from SellerCloud
+            valid_sc_po_ids = set()
+            page = 1
+            while True:
+                stats["api_calls"] += 1
+                response = self.client.get_purchase_orders_by_view(
+                    view_id=25,
+                    page_number=page,
+                    page_size=50
+                )
+                items = response.get("Items", [])
+                if not items:
+                    break
+                
+                for po in items:
+                    po_id = po.get("ID")
+                    if po_id:
+                        valid_sc_po_ids.add(po_id)
+                    
+                stats["sc_pos_fetched"] += len(items)
+                
+                # If we get fewer items than we asked for (or 0), we've hit the end
+                if len(items) < 50:
+                    break
+                page += 1
+                
+            # 2. Get all local PO IDs
+            from app.models import PurchaseOrder, ShippingContainer
+            local_pos = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id.isnot(None)).all()
+            stats["local_pos_checked"] = len(local_pos)
+            
+            # 3. Find POs that are in local but not in SC (with double-check to prevent deleting completed POs filtered out of view)
+            deleted_po_ids = []
+            for local_po in local_pos:
+                if local_po.sellercloud_po_id not in valid_sc_po_ids:
+                    try:
+                        self.client.get_purchase_order(local_po.sellercloud_po_id)
+                        # If this succeeds, the PO still exists on SellerCloud (just filtered out of the view)
+                    except Exception as e:
+                        # If it fails with a 500 or 404, it is actually deleted
+                        if "500" in str(e) or "404" in str(e) or "not found" in str(e).lower():
+                            deleted_po_ids.append(local_po.sellercloud_po_id)
+            
+            # 4. Delete them locally
+            for po_id in deleted_po_ids:
+                po = self.db.query(PurchaseOrder).filter(PurchaseOrder.sellercloud_po_id == po_id).first()
+                if po:
+                    self.db.delete(po)
+                    stats["pos_deleted"] += 1
+            
+            self.db.commit()
+            
+            # 5. Clean up completely empty containers
+            empty_containers = self.db.query(ShippingContainer).filter(
+                ~ShippingContainer.item_links.any()
+            ).all()
+            for c in empty_containers:
+                self.db.delete(c)
+                stats["containers_cleaned"] += 1
+            self.db.commit()
+            
+            return {
+                "success": True,
+                "stats": stats,
+                "message": f"Deep Cleanup completed. Found {stats['sc_pos_fetched']} valid POs in SellerCloud. Deleted {stats['pos_deleted']} local POs and cleaned {stats['containers_cleaned']} empty containers."
             }
             
         except Exception as e:
