@@ -505,6 +505,7 @@ def create_container(
     sc_response: dict = {}
     sellercloud_container_id = None
     sc_sync_error = None
+    sc_items_error = None
 
     try:
         sc_client = SellerCloudClient()
@@ -556,8 +557,9 @@ def create_container(
                 sc_client.add_items_to_container(sellercloud_container_id, sc_items)
                 print(f"[create_container] Added {len(sc_items)} items to SC container {sellercloud_container_id}")
             except Exception as items_err:
-                print(f"[create_container] SC add-items failed (container created, items not linked in SC): {items_err}")
-                sc_response["_items_error"] = str(items_err)
+                sc_items_error = str(items_err)
+                print(f"[create_container] SC add-items failed (container created, items not linked in SC): {sc_items_error}")
+                sc_response["_items_error"] = sc_items_error
 
     except Exception as exc:
         sc_sync_error = str(exc)
@@ -614,14 +616,20 @@ def create_container(
     db.commit()
     db.refresh(new_container)
 
+    sc_items_synced = sellercloud_container_id is not None and not sc_items_error
+
+    if not sellercloud_container_id:
+        message = "Container saved locally — SellerCloud sync failed (see sc_sync_error)"
+    elif sc_items_error:
+        message = "Container created in SellerCloud, but items failed to sync (see sc_items_error) — vendor/items will be missing in SellerCloud until this is retried"
+    else:
+        message = "Container created and synced to SellerCloud"
+
     response = {
         "success": True,
         "sellercloud_synced": sellercloud_container_id is not None,
-        "message": (
-            "Container created and synced to SellerCloud"
-            if sellercloud_container_id
-            else "Container saved locally — SellerCloud sync failed (see sc_sync_error)"
-        ),
+        "sellercloud_items_synced": sc_items_synced,
+        "message": message,
         "container": {
             "id": str(new_container.id),
             "sellercloud_container_id": new_container.sellercloud_container_id,
@@ -642,6 +650,8 @@ def create_container(
     }
     if sc_sync_error:
         response["sc_sync_error"] = sc_sync_error
+    if sc_items_error:
+        response["sc_items_error"] = sc_items_error
 
     return response
 
