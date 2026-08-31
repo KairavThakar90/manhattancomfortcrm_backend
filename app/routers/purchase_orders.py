@@ -2215,26 +2215,39 @@ def update_po_lead_time(
 
 @router.patch("/bulk/warehouse")
 def update_bulk_po_warehouse(
-    data: schemas.BulkPOWarehouseUpdate,
+    data: Optional[schemas.BulkPOWarehouseUpdate] = Body(None),
+    po_ids: Optional[List[str]] = Query(None, description="List of PO UUIDs or SellerCloud PO IDs (as query params, alternative to JSON body)"),
+    warehouse_id: Optional[str] = Query(None, description="UUID of the new warehouse (as query param, alternative to JSON body)"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
     """
     Update receiving warehouse for multiple purchase orders in both local DB and SellerCloud.
+
+    Accepts po_ids and warehouse_id either as a JSON body ({"po_ids": [...], "warehouse_id": "..."})
+    or as query parameters (?po_ids=1&po_ids=2&warehouse_id=...).
     """
     if current_user.role == "vendor":
         raise HTTPException(status_code=403, detail="Vendors cannot update warehouse")
 
+    resolved_po_ids = data.po_ids if data else po_ids
+    resolved_warehouse_id = data.warehouse_id if data else warehouse_id
+
+    if not resolved_po_ids:
+        raise HTTPException(status_code=422, detail="po_ids is required (in JSON body or as query params)")
+    if not resolved_warehouse_id:
+        raise HTTPException(status_code=422, detail="warehouse_id is required (in JSON body or as a query param)")
+
     try:
         import uuid
-        w_uuid = uuid.UUID(data.warehouse_id)
+        w_uuid = uuid.UUID(resolved_warehouse_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid warehouse_id format (must be UUID)")
-        
+
     warehouse = db.query(models.Warehouse).filter(models.Warehouse.id == w_uuid).first()
     if not warehouse:
-        raise HTTPException(status_code=404, detail=f"Warehouse '{data.warehouse_id}' not found")
-        
+        raise HTTPException(status_code=404, detail=f"Warehouse '{resolved_warehouse_id}' not found")
+
     if not warehouse.sellercloud_warehouse_id:
         raise HTTPException(status_code=400, detail="Warehouse must have a SellerCloud ID to sync")
 
@@ -2243,7 +2256,7 @@ def update_bulk_po_warehouse(
     updated_pos = []
     failed_pos = []
 
-    for po_id in data.po_ids:
+    for po_id in resolved_po_ids:
         po = None
         # Try to parse as integer (sellercloud_po_id)
         try:
