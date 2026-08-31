@@ -1,9 +1,9 @@
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime, timedelta
 import csv
 import io
 
-from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile, Request
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile, Request, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, cast, String
@@ -2294,36 +2294,19 @@ def update_bulk_po_warehouse(
 def update_po_warehouse(
     po_id: str,
     warehouse_id: str = Query(..., description="UUID of the warehouse"),
+    po_data: Optional[Any] = Body(None, description="Array of PO objects, list of PO IDs, or dictionary containing po_ids (used if path po_id is 'bulk')"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
     """
-    Update receiving warehouse for a specific purchase order in both local DB and SellerCloud.
+    Update receiving warehouse for one or more purchase orders in both local DB and SellerCloud.
     
-    Accepts PO UUID string or SellerCloud PO ID integer (like 11880).
+    Accepts a single PO UUID/SellerCloud PO ID or a comma-separated list of IDs in path,
+    or if path po_id is 'bulk', accepts a JSON array or object in the request body (e.g. {"po_ids": ["11880", "11881"]} or [{"po_id": "11880"}]).
     """
     if current_user.role == "vendor":
         raise HTTPException(status_code=403, detail="Vendors cannot update warehouse")
 
-    po = None
-    # Try to parse as integer (sellercloud_po_id)
-    try:
-        sc_po_id = int(po_id)
-        po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id).first()
-    except ValueError:
-        # Not an integer, lookup by UUID
-        try:
-            import uuid
-            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == uuid.UUID(po_id)).first()
-        except Exception:
-            pass
-            
-    if not po:
-        raise HTTPException(status_code=404, detail=f"Purchase order '{po_id}' not found")
-        
-    if not po.sellercloud_po_id:
-        raise HTTPException(status_code=400, detail="Cannot update warehouse for PO without SellerCloud ID")
-        
     try:
         import uuid
         w_uuid = uuid.UUID(warehouse_id)
@@ -2336,32 +2319,106 @@ def update_po_warehouse(
         
     if not warehouse.sellercloud_warehouse_id:
         raise HTTPException(status_code=400, detail="Warehouse must have a SellerCloud ID to sync")
+
+    # Extract PO identifiers from body if path po_id is 'bulk'
+    if po_id.lower() == "bulk":
+        if po_data is None:
+            raise HTTPException(status_code=400, detail="po_data body is required when po_id path is 'bulk'")
+        po_idents = []
+        if isinstance(po_data, dict):
+            # Check for common list keys like "po_ids", "po_id", "ids", "id"
+            found_key = False
+            for key in ["po_ids", "po_id", "ids", "id"]:
+                val = po_data.get(key)
+                if val is not None:
+                    found_key = True
+                    if isinstance(val, list):
+                        po_idents.extend([str(item) for item in val if item])
+                    else:
+                        po_idents.append(str(val))
+                    break
+            if not found_key:
+                # If no matching key is found, try to extract any list value or check if dict itself has keys
+                for val in po_data.values():
+                    if isinstance(val, list):
+                        po_idents.extend([str(item) for item in val if item])
+                        found_key = True
+                        break
+        elif isinstance(po_data, list):
+            for item in po_data:
+                if isinstance(item, dict):
+                    val = item.get("po_id") or item.get("id") or item.get("sellercloud_po_id")
+                    if val:
+                        po_idents.append(str(val))
+                elif isinstance(item, (str, int)):
+                    po_idents.append(str(item))
+    else:
+        # Split the po_id by comma to handle multiple IDs
+        po_idents = [p.strip() for p in po_id.split(",") if p.strip()]
         
-    # Update in SellerCloud
+    if not po_idents:
+        raise HTTPException(status_code=400, detail="No purchase order IDs provided")
+
     from app.services.sellercloud_client import sellercloud_client
-    try:
-        success = sellercloud_client.update_purchase_order_warehouse(po.sellercloud_po_id, warehouse.sellercloud_warehouse_id)
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to update warehouse in SellerCloud")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SellerCloud API error: {str(e)}")
+    
+    updated_pos = []
+    errors = []
+
+    for po_ident in po_idents:
+        po = None
+        # Try to parse as integer (sellercloud_po_id)
+        try:
+            sc_po_id = int(po_ident)
+            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id).first()
+        except ValueError:
+            # Not an integer, lookup by UUID
+            try:
+                po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == uuid.UUID(po_ident)).first()
+            except Exception:
+                pass
+                
+        if not po:
+            errors.append(f"Purchase order '{po_ident}' not found")
+            continue
+            
+        if not po.sellercloud_po_id:
+            errors.append(f"Purchase order '{po_ident}' does not have a SellerCloud ID")
+            continue
+
+        # Update in SellerCloud
+        try:
+            success = sellercloud_client.update_purchase_order_warehouse(po.sellercloud_po_id, warehouse.sellercloud_warehouse_id)
+            if not success:
+                errors.append(f"Failed to update PO {po_ident} in SellerCloud")
+                continue
+        except Exception as e:
+            errors.append(f"SellerCloud API error on PO {po_ident}: {str(e)}")
+            continue
+
+        # Update locally
+        old_warehouse_id = str(po.warehouse_id) if po.warehouse_id else None
+        po.warehouse_id = warehouse.id
+        db.commit()
+        db.refresh(po)
         
-    # Update locally
-    old_warehouse_id = str(po.warehouse_id) if po.warehouse_id else None
-    
-    po.warehouse_id = warehouse.id
-    db.commit()
-    db.refresh(po)
-    
-    changes = [{"field": "warehouse_id", "old": old_warehouse_id, "new": str(warehouse.id)}]
-    log_activity(db, action="UPDATE_PO_WAREHOUSE", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes, "warehouse_name": warehouse.name})
-    
+        changes = [{"field": "warehouse_id", "old": old_warehouse_id, "new": str(warehouse.id)}]
+        log_activity(db, action="UPDATE_PO_WAREHOUSE", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes, "warehouse_name": warehouse.name})
+        
+        updated_pos.append({
+            "id": str(po.id),
+            "sellercloud_po_id": po.sellercloud_po_id,
+            "warehouse_id": str(warehouse.id),
+            "warehouse_name": warehouse.name
+        })
+
+    if not updated_pos:
+        raise HTTPException(status_code=400, detail={"message": "Failed to update any purchase orders", "errors": errors})
+
     return {
-        "success": True, 
-        "message": "Warehouse updated successfully",
-        "po_id": str(po.id),
-        "warehouse_id": str(warehouse.id),
-        "warehouse_name": warehouse.name
+        "success": True,
+        "message": f"Warehouse updated successfully for {len(updated_pos)} purchase orders",
+        "purchase_orders": updated_pos,
+        "errors": errors if errors else None
     }
 
 
@@ -3154,7 +3211,11 @@ def sync_pos_optimized(
                 pass
 
     sync_service = OptimizedSyncService(db)
-    result = sync_service.sync_recent_pos(days=days_val, batch_size=batch_size, view_id=view_id)
+    result = sync_service.sync_recent_pos(
+        days=days_val, 
+        batch_size=batch_size, 
+        view_id=view_id
+    )
     
     if result.get("success"):
         return {
