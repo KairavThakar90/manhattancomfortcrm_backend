@@ -227,7 +227,8 @@ async def send_po_status_update_email(
     po_number: str, 
     old_status: str, 
     new_status: str, 
-    vendor_name: str
+    updater_name: str,
+    updater_role: str = "vendor"
 ):
     from app.models import User
     
@@ -242,7 +243,8 @@ async def send_po_status_update_email(
     if not emails:
         return
 
-    subject = f"PO #{po_number} Status Update - {vendor_name}"
+    role_label = "Admin" if updater_role == "admin" else "Vendor"
+    subject = f"PO #{po_number} Status Update - {updater_name}"
     
     changes_html = ""
     if old_status != new_status:
@@ -252,7 +254,7 @@ async def send_po_status_update_email(
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; border: 1px solid #eee; border-radius: 5px;">
         <h2 style="color: #333;">Purchase Order Status Updated</h2>
         <p style="font-size: 16px; color: #555;">
-            Vendor <strong>{vendor_name}</strong> has updated the status for PO <strong>#{po_number}</strong>.
+            {role_label} <strong>{updater_name}</strong> has updated the status for PO <strong>#{po_number}</strong>.
         </p>
         <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin-top: 15px; border-left: 4px solid #007bff;">
             {changes_html}

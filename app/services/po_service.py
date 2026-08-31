@@ -27,6 +27,9 @@ def recalculate_po_shipment_status(db: Session, po_id: str):
         else:
             po.status = "PARTIALLY_SHIPPED"
     else:
-        po.status = None
+        # Only clear the status if it was set to a shipment status (SHIPPED or PARTIALLY_SHIPPED).
+        # Do not overwrite manual production statuses like DELAYED or IN_PRODUCTION.
+        if po.status in ("SHIPPED", "PARTIALLY_SHIPPED"):
+            po.status = None
             
     db.commit()

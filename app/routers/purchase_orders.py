@@ -427,7 +427,7 @@ def list_purchase_orders(
         elif status is not None:
             # For other statuses (e.g. IN_PRODUCTION), only match if not overridden by dynamic logic
             q = q.filter(
-                models.PurchaseOrder.status == status,
+                func.lower(models.PurchaseOrder.status) == status.lower(),
                 func.coalesce(subq.c.tot_in_container, 0) == 0
             )
     
@@ -483,10 +483,10 @@ def list_purchase_orders(
         
     if approved_status:
         cutoff_10_days = datetime.utcnow() - timedelta(days=10)
-        status_val = approved_status.strip().lower()
-        if status_val == "ontime":
+        status_val = approved_status.strip().lower().replace(" ", "")
+        if status_val in ("ontime", "ontimes"):
             q = q.filter(models.PurchaseOrder.invoice_date.isnot(None))
-        elif status_val == "delayed":
+        elif status_val in ("delayed", "delay"):
             q = q.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.is_(None),
@@ -2145,17 +2145,20 @@ def update_po_status(
         db.refresh(po)
         log_activity(db, action="UPDATE_PO_STATUS", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(po.id), details={"changes": changes})
         
-        # Send email notification if vendor made the change
-        if current_user.role == "vendor":
+        # Send email notification if vendor or admin made the change
+        if current_user.role in ("vendor", "admin"):
             from app.services.email_service import send_po_status_update_email
-            vendor_name = po.vendor.name if po.vendor else "Unknown Vendor"
+            updater_name = current_user.full_name or current_user.email
+            if current_user.role == "vendor" and po.vendor:
+                updater_name = po.vendor.name
             background_tasks.add_task(
                 send_po_status_update_email,
                 db=db,
                 po_number=str(po.sellercloud_po_id),
                 old_status=old_status,
                 new_status=po.status,
-                vendor_name=vendor_name
+                updater_name=updater_name,
+                updater_role=current_user.role
             )
             
     return po

@@ -910,9 +910,13 @@ class PurchaseOrderOut(BaseModel):
             elif qty_cont > 0:
                 instance.status = "PARTIALLY_SHIPPED"
             else:
-                instance.status = "NOT_STARTED"
+                # If there are no items in container, preserve existing status (e.g., DELAYED, IN_PRODUCTION) if present.
+                # Otherwise, default to NOT_STARTED.
+                if not instance.status or instance.status in ("NOT_STARTED", "SHIPPED", "PARTIALLY_SHIPPED"):
+                    instance.status = "NOT_STARTED"
         else:
-            instance.status = "NOT_STARTED"
+            if not instance.status or instance.status in ("NOT_STARTED", "SHIPPED", "PARTIALLY_SHIPPED"):
+                instance.status = "NOT_STARTED"
         
         return instance
 
