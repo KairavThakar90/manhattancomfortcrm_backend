@@ -359,6 +359,7 @@ def list_purchase_orders(
     sellercloud_warehouse_id: Optional[str] = Query(None, description="Filter by Warehouse UUID or integer ID"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     approved_status: Optional[str] = Query(None, description="Filter by approved status (ontime, pending, delayed)"),
+    has_remaining_qty: Optional[bool] = Query(None, description="Filter POs that have items remaining to be added to containers"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -517,6 +518,20 @@ def list_purchase_orders(
                 )
             )
             
+    if has_remaining_qty is not None:
+        if has_remaining_qty:
+            q = q.filter(
+                models.PurchaseOrder.items.any(
+                    models.PurchaseOrderItem.qty_ordered > models.PurchaseOrderItem.qty_in_container
+                )
+            )
+        else:
+            q = q.filter(
+                ~models.PurchaseOrder.items.any(
+                    models.PurchaseOrderItem.qty_ordered > models.PurchaseOrderItem.qty_in_container
+                )
+            )
+
     if date_from:
         try:
             from datetime import datetime as dt, timezone
