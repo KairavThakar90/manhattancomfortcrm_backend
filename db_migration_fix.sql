@@ -203,3 +203,36 @@ ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS drayage_cost NUMERIC(14
 -- purchase_order_items: add image_url (commit 3ba58ed)
 -- ---------------------------------------------------------------------
 ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS image_url VARCHAR(500);
+
+-- ---------------------------------------------------------------------
+-- shipping_container_comments / shipping_container_comment_attachments
+-- (feat(comments): implement container comments feature - merged from main)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shipping_container_comments (
+    id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shipping_container_id  UUID NOT NULL REFERENCES shipping_containers(id) ON DELETE CASCADE,
+    user_id                UUID REFERENCES users(id) ON DELETE SET NULL,
+    parent_id              UUID REFERENCES shipping_container_comments(id) ON DELETE CASCADE,
+    comment                TEXT NOT NULL,
+    category               VARCHAR(50) NOT NULL, -- 'vendor_credit' or 'receiving_closure'
+    is_edited              BOOLEAN NOT NULL DEFAULT false,
+    created_at             TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_container_comments_container_id
+    ON shipping_container_comments (shipping_container_id);
+CREATE INDEX IF NOT EXISTS idx_shipping_container_comments_parent_id
+    ON shipping_container_comments (parent_id);
+
+CREATE TABLE IF NOT EXISTS shipping_container_comment_attachments (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    comment_id    UUID NOT NULL REFERENCES shipping_container_comments(id) ON DELETE CASCADE,
+    file_name     VARCHAR(255) NOT NULL,
+    file_url      TEXT NOT NULL,
+    content_type  VARCHAR(100),
+    size          INTEGER,
+    created_at    TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_container_comment_attachments_comment_id
+    ON shipping_container_comment_attachments (comment_id);
