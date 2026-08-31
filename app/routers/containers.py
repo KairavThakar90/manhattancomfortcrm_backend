@@ -94,6 +94,7 @@ def list_containers(
     query = db.query(models.ShippingContainer).options(
         joinedload(models.ShippingContainer.warehouse),
         joinedload(models.ShippingContainer.attachments),
+        joinedload(models.ShippingContainer.comments),
         joinedload(models.ShippingContainer.logistics_company),
         joinedload(models.ShippingContainer.item_links).joinedload(models.PurchaseOrderItemContainer.item).joinedload(models.PurchaseOrderItem.purchase_order)
     )
@@ -214,6 +215,10 @@ def list_containers(
                 if getattr(lnk.item, "purchase_order", None) and lnk.item.purchase_order.sellercloud_po_id:
                     po_numbers_set.add(lnk.item.purchase_order.sellercloud_po_id)
 
+        receiving_count = sum(1 for c in ctr.comments if c.category == "receiving_closure")
+        vendor_count = sum(1 for c in ctr.comments if c.category == "vendor_credit")
+        total_comments = len(ctr.comments)
+
         results.append(
             ContainerOut(
                 id=ctr.id,
@@ -247,7 +252,10 @@ def list_containers(
                 total_qty_received=total_received,
                 unique_pos=len(unique_po_ids),
                 po_numbers=list(po_numbers_set),
-                attachments=[ContainerAttachmentOut.model_validate(a) for a in ctr.attachments]
+                attachments=[ContainerAttachmentOut.model_validate(a) for a in ctr.attachments],
+                receiving_closure_comment_count=receiving_count,
+                vendor_credit_comment_count=vendor_count,
+                comments_count=total_comments
             )
         )
 

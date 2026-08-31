@@ -2446,6 +2446,75 @@ def update_po_warehouse(
     }
 
 
+@router.post("/{sellercloud_po_id}/sync-quantities")
+def sync_po_item_quantities(
+    sellercloud_po_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Fetch PO details from SellerCloud and update ONLY qty_ordered and qty_in_container in the local DB.
+    """
+    # 1. Fetch details from SellerCloud
+    from app.services.sellercloud_client import sellercloud_client
+    try:
+        detail = sellercloud_client.get_purchase_order(sellercloud_po_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SellerCloud API error: {str(e)}")
+
+    if not detail or "Items" not in detail:
+        raise HTTPException(status_code=404, detail="PO items not found in SellerCloud response")
+
+    # 2. Find local PO
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail=f"Purchase Order {sellercloud_po_id} not found in local database")
+
+    # 3. Update item quantities
+    updated_items = []
+    sc_items = detail.get("Items") or []
+    import uuid
+
+    for sc_item in sc_items:
+        sku = sc_item.get("Sku") or sc_item.get("ProductID")
+        sc_item_id = sc_item.get("ID")
+        
+        # Look up item locally by PO reference and SKU or SC Item ID
+        po_item = db.query(models.PurchaseOrderItem).filter(
+            models.PurchaseOrderItem.purchase_order_id == po.id,
+            (models.PurchaseOrderItem.sku == sku) | (models.PurchaseOrderItem.sellercloud_item_id == sc_item_id)
+        ).first()
+
+        if po_item:
+            old_ordered = po_item.qty_ordered
+            old_container = po_item.qty_in_container
+            
+            new_ordered = sc_item.get("QtyOrdered", 0)
+            new_container = sc_item.get("QtyInContainer") or 0
+            
+            po_item.qty_ordered = new_ordered
+            po_item.qty_in_container = new_container
+            
+            updated_items.append({
+                "sku": sku,
+                "sellercloud_item_id": sc_item_id,
+                "old_qty_ordered": old_ordered,
+                "new_qty_ordered": new_ordered,
+                "old_qty_in_container": old_container,
+                "new_qty_in_container": new_container
+            })
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Successfully updated quantities for {len(updated_items)} items",
+        "purchase_order_id": str(po.id),
+        "sellercloud_po_id": sellercloud_po_id,
+        "updated_items": updated_items
+    }
+
+
 @router.post("/sync", response_model=SyncResponse)
 def trigger_sync(
     view_id: Optional[int] = Query(None, description="SellerCloud saved PO view ID, defaults to 25"),

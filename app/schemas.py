@@ -359,6 +359,9 @@ class ContainerOut(BaseModel):
     po_numbers: List[int] = []
     attachments: List[ContainerAttachmentOut] = []
     tracking: Optional[ContainerTrackingOut] = None
+    receiving_closure_comment_count: int = 0
+    vendor_credit_comment_count: int = 0
+    comments_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
