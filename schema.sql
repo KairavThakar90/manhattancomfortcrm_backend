@@ -357,6 +357,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_item_containers (
     purchase_order_item_id     UUID NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
     shipping_container_id       UUID NOT NULL REFERENCES shipping_containers(id) ON DELETE CASCADE,
     qty_in_container             INTEGER DEFAULT 0,
+    qty_received_container       INTEGER DEFAULT 0,
     raw_json                     JSONB,
     created_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
