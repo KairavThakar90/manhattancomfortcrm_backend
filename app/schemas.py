@@ -519,6 +519,23 @@ class ContainerUpdate(BaseModel):
     trucker_email: Optional[str] = None
     trucking_company: Optional[str] = None
     logistics_company_id: Optional[uuid.UUID] = None
+    warehouse_id: Optional[Union[uuid.UUID, int, str]] = None
+    sellercloud_warehouse_id: Optional[int] = None
+
+
+class ContainerWarehouseUpdate(BaseModel):
+    warehouse_id: Optional[Union[uuid.UUID, int, str]] = Field(
+        default=None, 
+        description="Warehouse ID — accepts local UUID, SellerCloud integer ID, or warehouse name"
+    )
+    sellercloud_warehouse_id: Optional[int] = Field(
+        default=None,
+        description="SellerCloud warehouse integer ID (e.g. 138, 139, 146)"
+    )
+    warehouse_name: Optional[str] = Field(
+        default=None,
+        description="Warehouse name (e.g. 'South Brunswick', 'Lakewood')"
+    )
     logistics_company: Optional[LogisticsCompanyOut] = None
 
 

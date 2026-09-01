@@ -1,7 +1,7 @@
 """
 Container API endpoints
 """
-from typing import Optional, List
+from typing import Optional, List, Union, Dict, Any, Set, Tuple
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form, Request
@@ -13,7 +13,7 @@ from app import models, schemas
 from app.schemas import (
     ContainerOut, ContainerCreate, POItemsForContainerResponse,
     ContainerListResponse, ContainerDetailOut, ContainerDetailItemOut,
-    ContainerUpdate, ContainerAddItems, ContainerActivityCreate, ContainerAttachmentOut,
+    ContainerUpdate, ContainerWarehouseUpdate, ContainerAddItems, ContainerActivityCreate, ContainerAttachmentOut,
     UserActivityLogOut, PaginatedResponse, ContainerTrackingOut, ShippingContainerCommentOut
 )
 from app.services.sellercloud_client import SellerCloudClient
@@ -39,6 +39,43 @@ def resolve_container_filter(container_id: str):
         if container_id.isdigit():
             return models.ShippingContainer.sellercloud_container_id == int(container_id)
         raise HTTPException(status_code=400, detail="Invalid container ID format (must be UUID or SellerCloud integer ID)")
+
+
+def resolve_warehouse_helper(
+    db: Session,
+    warehouse_id: Optional[Union[uuid.UUID, int, str]] = None,
+    sellercloud_warehouse_id: Optional[int] = None,
+    warehouse_name: Optional[str] = None
+) -> Optional[models.Warehouse]:
+    """
+    Resolves a warehouse by SellerCloud integer ID, local database UUID, or warehouse name.
+    """
+    if sellercloud_warehouse_id is not None:
+        wh = db.query(models.Warehouse).filter(models.Warehouse.sellercloud_warehouse_id == sellercloud_warehouse_id).first()
+        if wh:
+            return wh
+
+    if warehouse_name:
+        wh = db.query(models.Warehouse).filter(models.Warehouse.name.ilike(warehouse_name.strip())).first()
+        if wh:
+            return wh
+
+    if warehouse_id is not None:
+        if isinstance(warehouse_id, int) or (isinstance(warehouse_id, str) and str(warehouse_id).isdigit()):
+            wh = db.query(models.Warehouse).filter(models.Warehouse.sellercloud_warehouse_id == int(warehouse_id)).first()
+            if wh:
+                return wh
+        try:
+            val_uuid = uuid.UUID(str(warehouse_id))
+            wh = db.query(models.Warehouse).filter(models.Warehouse.id == val_uuid).first()
+            if wh:
+                return wh
+        except ValueError:
+            wh = db.query(models.Warehouse).filter(models.Warehouse.name.ilike(str(warehouse_id).strip())).first()
+            if wh:
+                return wh
+
+    return None
 
 router = APIRouter(
     prefix="/containers",
@@ -85,6 +122,7 @@ def list_containers(
     page_size: int = Query(25, ge=1, le=200, description="Items per page"),
     received: Optional[bool] = Query(None, description="True = received only, False = not received, omit = all"),
     container_status: Optional[str] = Query(None, description="Filter by container status: FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT (comma-separated for multiple)"),
+    status: Optional[str] = Query(None, description="Alias for container_status: FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT"),
     search: Optional[str] = Query(None, description="Search by container name (partial match)"),
     po_id: Optional[str] = Query(None, description="Filter by Purchase Order UUID"),
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
@@ -105,7 +143,7 @@ def list_containers(
     Paginated list of all shipping containers with filters and summary counts.
 
     **Filters:**
-    - `container_status` — FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT
+    - `status` / `container_status` — FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT
     - `received=true` — only containers with a received date
     - `received=false` — only containers NOT yet received (in transit / pending)
     - `search` — partial container name search (case-insensitive)
@@ -137,11 +175,12 @@ def list_containers(
     elif received is False:
         query = query.filter(models.ShippingContainer.received_date.is_(None))
 
-    # Filter by Container Status
-    if container_status:
+    # Filter by Container Status (accepts either container_status or status query param)
+    effective_status = container_status or status
+    if effective_status:
         requested_statuses = [
             s.strip().upper().replace(" ", "_").replace("-", "_").replace("/", "_")
-            for s in container_status.split(",")
+            for s in effective_status.split(",")
             if s.strip()
         ]
         
@@ -1105,6 +1144,94 @@ async def update_container(
     }
 
 
+# ---------------------------------------------------------------------------
+# PUT /containers/{container_id}/warehouse
+# ---------------------------------------------------------------------------
+@router.put("/{container_id}/warehouse")
+@router.patch("/{container_id}/warehouse")
+def update_container_warehouse(
+    container_id: str,
+    payload: ContainerWarehouseUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Update receiving warehouse for a container in both SellerCloud and local database.
+    Required parameter: warehouse_id (accepts warehouse UUID, SellerCloud integer ID, or warehouse name).
+    """
+    if current_user.role == "vendor":
+        raise HTTPException(status_code=403, detail="Vendors cannot update container warehouse")
+        
+    container = db.query(models.ShippingContainer).filter(resolve_container_filter(container_id)).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    warehouse = resolve_warehouse_helper(
+        db,
+        warehouse_id=payload.warehouse_id,
+        sellercloud_warehouse_id=payload.sellercloud_warehouse_id,
+        warehouse_name=payload.warehouse_name
+    )
+    if not warehouse:
+        raise HTTPException(
+            status_code=400,
+            detail="Warehouse not found. Please provide a valid warehouse_id, sellercloud_warehouse_id, or warehouse_name."
+        )
+
+    old_wh_name = container.warehouse.name if container.warehouse else None
+    sc_updated = False
+
+    # Sync to SellerCloud if container has a SellerCloud ID
+    if container.sellercloud_container_id and warehouse.sellercloud_warehouse_id:
+        try:
+            sc_client = SellerCloudClient()
+            sc_resp = sc_client.update_shipping_container(
+                container.sellercloud_container_id,
+                {
+                    "ContainerName": container.container_name,
+                    "ReceivingWarehouseID": warehouse.sellercloud_warehouse_id,
+                    "EstimatedArrivalDate": format_sc_date(container.estimated_arrival_date),
+                    "ShippingStatus": 2 if container.received_date else 1
+                }
+            )
+            sc_updated = sc_resp.get("success", False)
+        except Exception as exc:
+            print(f"Failed to update warehouse for container {container.sellercloud_container_id} in SellerCloud: {exc}")
+
+    # Update local database
+    container.warehouse_id = warehouse.id
+    container.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(container)
+
+    log_activity(
+        db,
+        action="UPDATE_CONTAINER_WAREHOUSE",
+        user_id=current_user.id,
+        entity_type="CONTAINER",
+        entity_id=str(container.id),
+        details={
+            "old_warehouse": old_wh_name,
+            "new_warehouse": warehouse.name,
+            "sellercloud_warehouse_id": warehouse.sellercloud_warehouse_id,
+            "sellercloud_synced": sc_updated
+        }
+    )
+
+    return {
+        "success": True,
+        "message": f"Successfully updated container warehouse to '{warehouse.name}'",
+        "container_id": str(container.id),
+        "sellercloud_container_id": container.sellercloud_container_id,
+        "sellercloud_synced": sc_updated,
+        "warehouse": {
+            "id": str(warehouse.id),
+            "name": warehouse.name,
+            "sellercloud_warehouse_id": warehouse.sellercloud_warehouse_id
+        }
+    }
+
+
 @router.post("/preview-sc-payload")
 def preview_sc_payload(
     container_data: ContainerCreate,
@@ -1449,18 +1576,17 @@ def get_container_details(
             )
         )
 
-    # Sort items so that items with discrepancies (where received quantity differs from ordered/container qty) appear first:
+    # Sort items so that items with container shortage (where qty_received_container < qty_in_container) appear first:
     def item_discrepancy_sort_key(itm: ContainerDetailItemOut):
-        has_container_diff = (itm.qty_in_container or 0) != (itm.qty_received_container or 0)
-        has_po_diff = (itm.qty_ordered or 0) != (itm.qty_received or 0)
-        has_diff = has_container_diff or has_po_diff
+        qty_in = itm.qty_in_container or 0
+        qty_recv = itm.qty_received_container or 0
+        shortage = max(0, qty_in - qty_recv)
+        has_shortage = shortage > 0
         
-        container_diff_mag = abs((itm.qty_in_container or 0) - (itm.qty_received_container or 0))
-        po_diff_mag = abs((itm.qty_ordered or 0) - (itm.qty_received or 0))
-        max_diff_mag = max(container_diff_mag, po_diff_mag)
-        
-        # Discrepancy items first (0), sorted by largest difference (-max_diff_mag), then by SKU
-        return (0 if has_diff else 1, -max_diff_mag, itm.sku or "")
+        # 1. Shortage items first (0), fully received items last (1)
+        # 2. Largest shortage first (-shortage)
+        # 3. Alphabetical by SKU
+        return (0 if has_shortage else 1, -shortage, itm.sku or "")
 
     items_out.sort(key=item_discrepancy_sort_key)
 

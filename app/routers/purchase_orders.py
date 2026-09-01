@@ -345,7 +345,7 @@ def list_purchase_orders(
     page_size: Optional[int] = Query(None, ge=1, description="Items per page. Leave empty for all."),
     status_code: Optional[int] = Query(None, description="Raw SellerCloud PurchaseOrderStatus code"),
     status: Optional[str] = Query(None, description="Filter by text status (e.g., NOT_STARTED, IN_PRODUCTION)"),
-    vendor_id: Optional[str] = None,
+    vendor_id: Optional[str] = Query(None, description="Filter by local Vendor UUID, SC integer ID, or vendor name"),
     company_id: Optional[str] = Query(None, description="Filter by local Company UUID"),
     sellercloud_company_id: Optional[int] = Query(None, description="Filter by SellerCloud Company integer ID"),
     sort_by: Optional[str] = Query(None, description="Field to sort by: created_on, date_ordered, invoice_date, expected_delivery_date, total_amount"),
@@ -356,6 +356,7 @@ def list_purchase_orders(
     customer_id: Optional[str] = Query(None, description="Filter by local Customer UUID"),
     channel_id: Optional[str] = Query(None, description="Filter by local Channel UUID"),
     channel_order_id: Optional[str] = Query(None, description="Filter by explicit Channel Order ID (e.g. 'Schuchman')"),
+    warehouse_id: Optional[str] = Query(None, description="Filter by Warehouse local UUID, SellerCloud integer ID, or name"),
     sellercloud_warehouse_id: Optional[str] = Query(None, description="Filter by Warehouse UUID or integer ID"),
     is_completed: Optional[bool] = Query(None, description="True for Completed/Received POs, False for Open POs"),
     approved_status: Optional[str] = Query(None, description="Filter by approved status (ontime, pending, delayed)"),
@@ -386,6 +387,68 @@ def list_purchase_orders(
         joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
     
+    # Filter by Warehouse (accepts UUID, SellerCloud integer ID, or warehouse name)
+    if warehouse_id or sellercloud_warehouse_id:
+        target_wh = warehouse_id or sellercloud_warehouse_id
+        target_wh_str = str(target_wh).strip()
+        if target_wh_str.isdigit():
+            q = q.join(models.PurchaseOrder.warehouse).filter(
+                models.Warehouse.sellercloud_warehouse_id == int(target_wh_str)
+            )
+        else:
+            try:
+                import uuid
+                wh_uuid = uuid.UUID(target_wh_str)
+                q = q.filter(models.PurchaseOrder.warehouse_id == wh_uuid)
+            except ValueError:
+                q = q.join(models.PurchaseOrder.warehouse).filter(
+                    models.Warehouse.name.ilike(f"%{target_wh_str}%")
+                )
+
+    # Filter by Vendor
+    if vendor_id:
+        vendor_id_str = str(vendor_id).strip()
+        if vendor_id_str.isdigit():
+            q = q.join(models.PurchaseOrder.vendor).filter(
+                models.Vendor.sellercloud_vendor_id == int(vendor_id_str)
+            )
+        else:
+            try:
+                import uuid
+                v_uuid = uuid.UUID(vendor_id_str)
+                q = q.filter(models.PurchaseOrder.vendor_id == v_uuid)
+            except ValueError:
+                q = q.join(models.PurchaseOrder.vendor).filter(
+                    models.Vendor.name.ilike(f"%{vendor_id_str}%")
+                )
+
+    # Filter by Company
+    if company_id or sellercloud_company_id:
+        target_comp = company_id or sellercloud_company_id
+        target_comp_str = str(target_comp).strip()
+        if target_comp_str.isdigit():
+            q = q.join(models.PurchaseOrder.company).filter(
+                models.Company.sellercloud_company_id == int(target_comp_str)
+            )
+        else:
+            try:
+                import uuid
+                c_uuid = uuid.UUID(target_comp_str)
+                q = q.filter(models.PurchaseOrder.company_id == c_uuid)
+            except ValueError:
+                q = q.join(models.PurchaseOrder.company).filter(
+                    models.Company.name.ilike(f"%{target_comp_str}%")
+                )
+
+    # Filter by Customer
+    if customer_id:
+        try:
+            import uuid
+            cust_uuid = uuid.UUID(str(customer_id).strip())
+            q = q.filter(models.PurchaseOrder.customer_id == cust_uuid)
+        except ValueError:
+            pass
+
     if channel_id:
         try:
             import uuid
