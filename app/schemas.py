@@ -840,6 +840,8 @@ class PurchaseOrderOut(BaseModel):
         # Populate delay_reason_updated_by and delay_reason_updated_at
         if hasattr(obj, 'delay_reason_user') and obj.delay_reason_user:
             instance.delay_reason_updated_by = obj.delay_reason_user.full_name or obj.delay_reason_user.first_name or obj.delay_reason_user.email
+        elif getattr(obj, 'delay_reason_updated_by', None):
+            instance.delay_reason_updated_by = obj.delay_reason_updated_by
         instance.delay_reason_updated_at = getattr(obj, 'delay_reason_updated_at', None)
         
         # 1. Check if invoice is delayed (missing after 10 days)

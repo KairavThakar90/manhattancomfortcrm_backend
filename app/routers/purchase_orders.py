@@ -2,6 +2,7 @@ from typing import Optional, List, Any
 from datetime import datetime, timedelta
 import csv
 import io
+import uuid
 
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks, Form, File, UploadFile, Request, Body
 from fastapi.responses import StreamingResponse
@@ -2131,10 +2132,30 @@ def update_po_status(
     po = None
     try:
         sc_po_id = int(po_id)
-        po = db.query(models.PurchaseOrder).options(joinedload(models.PurchaseOrder.vendor)).filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id).first()
+        po = (
+            db.query(models.PurchaseOrder)
+            .options(
+                joinedload(models.PurchaseOrder.vendor),
+                joinedload(models.PurchaseOrder.delay_reason_user)
+            )
+            .filter(models.PurchaseOrder.sellercloud_po_id == sc_po_id)
+            .first()
+        )
     except ValueError:
+        pass
+
+    if not po:
         try:
-            po = db.query(models.PurchaseOrder).options(joinedload(models.PurchaseOrder.vendor)).filter(models.PurchaseOrder.id == po_id).first()
+            val_uuid = uuid.UUID(str(po_id))
+            po = (
+                db.query(models.PurchaseOrder)
+                .options(
+                    joinedload(models.PurchaseOrder.vendor),
+                    joinedload(models.PurchaseOrder.delay_reason_user)
+                )
+                .filter(models.PurchaseOrder.id == val_uuid)
+                .first()
+            )
         except Exception:
             pass
             
@@ -2154,12 +2175,14 @@ def update_po_status(
         po.status = status_data.status
         changed = True
         
-    if status_data.delay_reason is not None and po.delay_reason != status_data.delay_reason:
-        changes.append({"field": "delay_reason", "old": po.delay_reason, "new": status_data.delay_reason})
-        po.delay_reason = status_data.delay_reason
-        po.delay_reason_updated_by_id = current_user.id
-        po.delay_reason_updated_at = datetime.utcnow()
-        changed = True
+    if status_data.delay_reason is not None:
+        if po.delay_reason != status_data.delay_reason or po.delay_reason_updated_by_id is None:
+            changes.append({"field": "delay_reason", "old": po.delay_reason, "new": status_data.delay_reason})
+            po.delay_reason = status_data.delay_reason
+            po.delay_reason_updated_by_id = current_user.id
+            po.delay_reason_updated_at = datetime.utcnow()
+            po.delay_reason_user = current_user
+            changed = True
         
     if changed:
         db.commit()
@@ -2182,7 +2205,21 @@ def update_po_status(
                 updater_role=current_user.role
             )
             
-    return po
+    # Re-fetch with loaded relationships for response serialization
+    target_po = (
+        db.query(models.PurchaseOrder)
+        .options(
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.company),
+            joinedload(models.PurchaseOrder.customer),
+            joinedload(models.PurchaseOrder.delay_reason_user),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
+        )
+        .filter(models.PurchaseOrder.id == po.id)
+        .first()
+    ) or po
+    return PurchaseOrderOut.model_validate(target_po)
 
 @router.patch("/{po_id}/lead-time")
 def update_po_lead_time(

@@ -1331,3 +1331,222 @@ def sync_all_db_purchase_orders(
         "errors": errors
     }
 
+
+def sync_single_container_full(db: Session, container_identifier: str, sync_pos: bool = True) -> dict:
+    """
+    Instant full sync for a single specific shipping container:
+    1. Resolves container identifier (SellerCloud integer ID, local UUID, or container name).
+    2. Fetches fresh container details & line items from SellerCloud (GET /api/ShippingContainers/{id}).
+    3. If sync_pos=True (or PO missing locally), syncs linked Purchase Orders from SellerCloud.
+    4. Upserts ShippingContainer record (header & full raw_json).
+    5. Upserts PurchaseOrderItemContainer links (qty_in_container, qty_received_container, and item raw_json).
+    6. Updates PurchaseOrderItem quantities and recalculates PO shipment statuses.
+    7. Returns complete sync summary.
+    """
+    import uuid
+    from datetime import timezone
+    from app.services.po_service import recalculate_po_shipment_status
+
+    container_sc_id = None
+    container_local = None
+
+    # 1. Try resolving as integer (SellerCloud Container ID)
+    try:
+        container_sc_id = int(container_identifier)
+    except ValueError:
+        pass
+
+    # 2. Try resolving as UUID (Local Database ID)
+    if not container_sc_id:
+        try:
+            c_uuid = uuid.UUID(container_identifier)
+            container_local = db.query(models.ShippingContainer).filter(models.ShippingContainer.id == c_uuid).first()
+            if container_local and container_local.sellercloud_container_id:
+                container_sc_id = container_local.sellercloud_container_id
+        except ValueError:
+            pass
+
+    # 3. Try resolving as Container Name (e.g. "MEDU7337920")
+    if not container_sc_id:
+        container_local = db.query(models.ShippingContainer).filter(
+            models.ShippingContainer.container_name.ilike(str(container_identifier).strip())
+        ).first()
+        if container_local and container_local.sellercloud_container_id:
+            container_sc_id = container_local.sellercloud_container_id
+
+    if not container_sc_id:
+        raise ValueError(f"Could not resolve SellerCloud container ID for '{container_identifier}'. Please ensure the container exists with a valid SellerCloud ID.")
+
+    # Fetch live container details from SellerCloud
+    detail = sellercloud_client.get_container(container_sc_id)
+    if not detail or not isinstance(detail, dict):
+        raise ValueError(f"Container {container_sc_id} not found in SellerCloud.")
+
+    details_section = detail.get("Details") or {}
+    results = ((detail.get("Items") or {}).get("Results")) or []
+
+    # Identify all linked POs
+    po_sc_ids = set()
+    for entry in results:
+        poid = entry.get("POID")
+        if poid:
+            po_sc_ids.add(poid)
+
+    pos_sync_results = []
+    if sync_pos:
+        for poid in po_sc_ids:
+            try:
+                po_res = sync_single_po_full(db, poid)
+                pos_sync_results.append({"po_id": poid, "status": "synced"})
+            except Exception as po_err:
+                pos_sync_results.append({"po_id": poid, "status": "failed", "error": str(po_err)})
+    else:
+        for poid in po_sc_ids:
+            existing_po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == poid).first()
+            if not existing_po:
+                try:
+                    sync_single_po_full(db, poid)
+                    pos_sync_results.append({"po_id": poid, "status": "synced_missing"})
+                except Exception as po_err:
+                    pos_sync_results.append({"po_id": poid, "status": "failed", "error": str(po_err)})
+
+    # Upsert ShippingContainer
+    warehouse_sc_id = details_section.get("ReceivingWarehouseID") or details_section.get("ReceiveWarehouseID")
+    warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
+
+    received_date = None
+    recv_raw = details_section.get("ReceivedOnDate") or details_section.get("ReceivedDate")
+    if recv_raw:
+        parsed_recv = _parse_iso_datetime(recv_raw)
+        if parsed_recv:
+            received_date = parsed_recv.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
+
+    container = (
+        db.query(models.ShippingContainer)
+        .filter(models.ShippingContainer.sellercloud_container_id == container_sc_id)
+        .first()
+    )
+    if not container:
+        sc_name = details_section.get("ContainerName")
+        if sc_name:
+            container = (
+                db.query(models.ShippingContainer)
+                .filter(
+                    models.ShippingContainer.container_name == sc_name,
+                    models.ShippingContainer.sellercloud_container_id.is_(None),
+                )
+                .first()
+            )
+
+    container_fields = dict(
+        sellercloud_container_id=container_sc_id,
+        container_name=details_section.get("ContainerName"),
+        received_date=received_date,
+        warehouse_id=warehouse.id if warehouse else None,
+        raw_json=detail,
+    )
+    if container:
+        for k, v in container_fields.items():
+            setattr(container, k, v)
+    else:
+        container = models.ShippingContainer(**container_fields)
+        db.add(container)
+        db.flush()
+
+    # Map items inside container
+    item_sc_ids = [entry.get("POItemID") for entry in results if entry.get("POItemID")]
+    local_items = (
+        db.query(models.PurchaseOrderItem)
+        .filter(models.PurchaseOrderItem.sellercloud_item_id.in_(item_sc_ids))
+        .all()
+    ) if item_sc_ids else []
+    item_by_sc_id = {item.sellercloud_item_id: item for item in local_items}
+
+    links_synced = 0
+    synced_items_summary = []
+    affected_po_ids = set()
+
+    for entry in results:
+        po_item_sc_id = entry.get("POItemID")
+        match = item_by_sc_id.get(po_item_sc_id)
+        if not match:
+            continue
+
+        existing_link = (
+            db.query(models.PurchaseOrderItemContainer)
+            .filter(
+                models.PurchaseOrderItemContainer.purchase_order_item_id == match.id,
+                models.PurchaseOrderItemContainer.shipping_container_id == container.id,
+            )
+            .first()
+        )
+        qty_in_cont = entry.get("Qty", 0) or 0
+        qty_recv_cont = entry.get("QtyReceived", 0) or 0
+
+        link_fields = dict(
+            purchase_order_item_id=match.id,
+            shipping_container_id=container.id,
+            qty_in_container=qty_in_cont,
+            qty_received_container=qty_recv_cont,
+            raw_json=entry,
+        )
+        if existing_link:
+            for k, v in link_fields.items():
+                setattr(existing_link, k, v)
+        else:
+            db.add(models.PurchaseOrderItemContainer(**link_fields))
+
+        links_synced += 1
+        if match.purchase_order_id:
+            affected_po_ids.add(str(match.purchase_order_id))
+
+        synced_items_summary.append({
+            "sku": match.sku,
+            "product_name": match.product_name,
+            "qty_in_container": qty_in_cont,
+            "qty_received_container": qty_recv_cont,
+            "sellercloud_po_id": match.purchase_order.sellercloud_po_id if match.purchase_order else None
+        })
+
+    db.flush()
+
+    # Update item qty_in_container and recalculate PO statuses
+    for po_id_str in affected_po_ids:
+        po_obj = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_id_str).first()
+        if po_obj:
+            for po_item in po_obj.items:
+                total_in_cont = sum(
+                    link.qty_in_container for link in po_item.container_links if link.qty_in_container
+                )
+                po_item.qty_in_container = total_in_cont
+            recalculate_po_shipment_status(db, po_id_str)
+
+    db.commit()
+    db.refresh(container)
+
+    _log_sync(
+        db,
+        entity_type="shipping_container_single_full",
+        status="success",
+        count=1,
+        message=f"Synced container {container.container_name} (SC ID {container_sc_id}): {links_synced} items linked, {len(pos_sync_results)} POs synced."
+    )
+
+    return {
+        "success": True,
+        "message": f"Successfully synced container '{container.container_name}' (ID: {container_sc_id})",
+        "container": {
+            "id": str(container.id),
+            "sellercloud_container_id": container.sellercloud_container_id,
+            "container_name": container.container_name,
+            "received_date": container.received_date.isoformat() if container.received_date else None,
+            "warehouse": warehouse.name if warehouse else None,
+            "total_items": len(synced_items_summary),
+            "total_qty_in_container": sum(i["qty_in_container"] for i in synced_items_summary),
+            "total_qty_received_container": sum(i["qty_received_container"] for i in synced_items_summary),
+        },
+        "items": synced_items_summary,
+        "linked_pos": pos_sync_results
+    }
+
+

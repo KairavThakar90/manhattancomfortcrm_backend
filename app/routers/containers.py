@@ -1437,110 +1437,58 @@ def delete_container_attachment(
 # POST /containers/{container_id}/sync
 # Re-pull container info from SellerCloud
 # ---------------------------------------------------------------------------
-import httpx
-
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/sync — Instant Full Container Sync
+# ---------------------------------------------------------------------------
 @router.post("/{container_id}/sync")
-def sync_container_from_sellercloud(
+def sync_specific_container(
     container_id: str,
+    sync_pos: bool = Query(True, description="Also refresh linked Purchase Orders from SellerCloud"),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
-    Re-sync a container from SellerCloud (name, ETA, received date).
-    Useful after changes are made directly in SellerCloud.
-    """
-    container = (
-        db.query(models.ShippingContainer)
-        .filter(resolve_container_filter(container_id))
-        .first()
-    )
-    if not container:
-        raise HTTPException(status_code=404, detail="Container not found")
+    **INSTANT SINGLE CONTAINER SYNC**
 
-    if not container.sellercloud_container_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Container has no SellerCloud ID — cannot sync",
-        )
+    Instantly syncs a specific shipping container and its items directly from SellerCloud:
+    1. Fetches live container status, dates, and warehouse from SellerCloud.
+    2. Discovers all items, `Qty`, and `QtyReceived` inside this container.
+    3. If `sync_pos=True`, automatically syncs/refreshes the linked Purchase Orders.
+    4. Updates local `shipping_containers` and `purchase_order_item_containers` link tables.
+    5. Recalculates PO item quantities and PO shipment statuses.
+
+    **Parameter `{container_id}` accepts:**
+    - SellerCloud Container ID (e.g. `5012`)
+    - Local Database UUID (e.g. `25af8811-e8e6-47e6-b18a-c7a58741f33c`)
+    - Container Name (e.g. `MEDU7337920`)
+    """
+    from app.services.sync_service import sync_single_container_full
+    from app.services.activity_service import log_activity
 
     try:
-        sc_client = SellerCloudClient()
-        sc_resp = sc_client.get(f"/api/ShippingContainers/{container.sellercloud_container_id}")
+        result = sync_single_container_full(db, container_identifier=container_id, sync_pos=sync_pos)
         
-        from app.services.sync_service import _get_or_create_warehouse
-
-        # SC response: { "Details": {ContainerName, EstimatedArrivalDate, ReceivedOnDate}, "Items": {...} }
-        sc = sc_resp.get("Details") or sc_resp
-
-        container.container_name = sc.get("ContainerName") or container.container_name
-
-        if sc.get("EstimatedArrivalDate"):
-            raw_dt = datetime.fromisoformat(sc["EstimatedArrivalDate"].replace("Z", ""))
-            container.estimated_arrival_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-
-        received_raw = sc.get("ReceivedOnDate") or sc.get("ReceivedDate")
-        if received_raw:
-            raw_dt = datetime.fromisoformat(received_raw.replace("Z", ""))
-            container.received_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-
-        warehouse_sc_id = sc.get("ReceivingWarehouseID") or sc.get("ReceiveWarehouseID")
-        warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
-        if warehouse:
-            container.warehouse_id = warehouse.id
-
-        container.updated_at = datetime.utcnow()
-        db.commit()
-
-        return {
-            "success": True,
-            "message": "Container synced from SellerCloud",
-            "container": {
-                "id": str(container.id),
-                "sellercloud_container_id": container.sellercloud_container_id,
-                "container_name": container.container_name,
-                "estimated_arrival_date": (
-                    container.estimated_arrival_date.isoformat()
-                    if container.estimated_arrival_date
-                    else None
-                ),
-                "received_date": (
-                    container.received_date.isoformat() if container.received_date else None
-                ),
-                "warehouse_id": str(container.warehouse_id) if container.warehouse_id else None,
-                "warehouse": {
-                    "id": str(warehouse.id),
-                    "sellercloud_warehouse_id": warehouse.sellercloud_warehouse_id,
-                    "name": warehouse.name,
-                    "is_default": warehouse.is_default,
-                    "warehouse_type": warehouse.warehouse_type,
-                    "is_sellable": warehouse.is_sellable
-                } if warehouse else None
-            },
-        }
-
-    except httpx.HTTPStatusError as exc:
-        db.rollback()
-        if exc.response.status_code == 404:
-            # The container was deleted in SellerCloud, so delete it locally
-            db.delete(container)
-            db.commit()
-            return {
-                "success": True,
-                "message": "Container was deleted in SellerCloud and has been removed locally.",
-                "deleted": True
+        log_activity(
+            db,
+            action="SYNC_SINGLE_CONTAINER_INSTANT",
+            user_id=current_user.id,
+            entity_type="SHIPPING_CONTAINER",
+            entity_id=str(container_id),
+            details={
+                "container_name": result.get("container", {}).get("container_name"),
+                "sellercloud_container_id": result.get("container", {}).get("sellercloud_container_id"),
+                "total_items": result.get("container", {}).get("total_items"),
+                "total_qty_in_container": result.get("container", {}).get("total_qty_in_container"),
+                "total_qty_received_container": result.get("container", {}).get("total_qty_received_container"),
             }
-        return {
-            "success": False,
-            "message": "Error syncing from SellerCloud",
-            "error": str(exc)
-        }
-    except Exception as exc:
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
         db.rollback()
-        # Return structured error response instead of 500 so frontend can handle it
-        return {
-            "success": False,
-            "message": "Error syncing from SellerCloud",
-            "error": str(exc)
-        }
+        raise HTTPException(status_code=500, detail=f"Error syncing container '{container_id}': {str(e)}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -2768,3 +2716,7 @@ async def process_container_comment_tags(
             attachments=attachments,
             container_name=container_name
         )
+
+
+
+
