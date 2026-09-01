@@ -2,7 +2,7 @@
 Container API endpoints
 """
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form, Request
 from sqlalchemy.orm import Session, joinedload
@@ -67,7 +67,7 @@ def list_containers(
     receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date (alias for date_to)"),
     eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
     eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
-    sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
+    sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status, date_emptied"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -83,6 +83,8 @@ def list_containers(
     - `sellercloud_po_id` — containers linked to a specific PO (SC integer ID)
     - `vendor_id` — containers linked to POs from a specific vendor
     - `sellercloud_warehouse_id` — containers stored in a specific warehouse (SC integer ID)
+    - `sort_by` — `eta_delivery`, `receive_date`, `date_emptied`, `status`
+    - `sort_order` — `asc` or `desc`
 
     Each result includes:
     - `is_received` — boolean derived from received_date
@@ -181,6 +183,8 @@ def list_containers(
         sort_col = models.ShippingContainer.estimated_arrival_date
     elif sort_by == "receive_date":
         sort_col = models.ShippingContainer.received_date
+    elif sort_by in ("date_emptied", "emptied_date"):
+        sort_col = models.ShippingContainer.date_emptied
     elif sort_by == "status":
         sort_col = models.ShippingContainer.received_date.is_(None)
     else:
@@ -188,9 +192,9 @@ def list_containers(
 
     if sort_col is not None:
         if sort_order and sort_order.lower() == "asc":
-            order_clauses.append(sort_col.asc())
+            order_clauses.append(sort_col.asc().nullslast())
         else:
-            order_clauses.append(sort_col.desc())
+            order_clauses.append(sort_col.desc().nullslast())
 
     total = query.count()
     containers = (
