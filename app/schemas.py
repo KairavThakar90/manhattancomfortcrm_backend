@@ -747,6 +747,8 @@ class PurchaseOrderOut(BaseModel):
     total_qty_in_container: Optional[int] = None
     total_comments_count: int = 0
     delay_reason: Optional[str] = None
+    delay_reason_updated_by: Optional[str] = None
+    delay_reason_updated_at: Optional[datetime] = None
     
     # Nested Information
     container_names: List[str] = []  # All unique container names for this PO
@@ -834,6 +836,11 @@ class PurchaseOrderOut(BaseModel):
                 if hasattr(item, 'comments') and item.comments:
                     total_comments += len(item.comments)
         instance.total_comments_count = total_comments
+        
+        # Populate delay_reason_updated_by and delay_reason_updated_at
+        if hasattr(obj, 'delay_reason_user') and obj.delay_reason_user:
+            instance.delay_reason_updated_by = obj.delay_reason_user.full_name or obj.delay_reason_user.first_name or obj.delay_reason_user.email
+        instance.delay_reason_updated_at = getattr(obj, 'delay_reason_updated_at', None)
         
         # 1. Check if invoice is delayed (missing after 10 days)
         if instance.invoice_date:

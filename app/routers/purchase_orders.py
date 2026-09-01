@@ -370,8 +370,9 @@ def list_purchase_orders(
         joinedload(models.PurchaseOrder.vendor),
         joinedload(models.PurchaseOrder.company),
         joinedload(models.PurchaseOrder.customer),
-            joinedload(models.PurchaseOrder.comments),
-            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
+        joinedload(models.PurchaseOrder.delay_reason_user),
+        joinedload(models.PurchaseOrder.comments),
+        joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments)
     )
     
     if channel_id:
@@ -657,7 +658,8 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.vendor),
             joinedload(models.PurchaseOrder.company),
-        joinedload(models.PurchaseOrder.customer),
+            joinedload(models.PurchaseOrder.customer),
+            joinedload(models.PurchaseOrder.delay_reason_user),
             joinedload(models.PurchaseOrder.comments),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments).joinedload(models.PurchaseOrderItemComment.user),
             joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user)
@@ -2155,6 +2157,8 @@ def update_po_status(
     if status_data.delay_reason is not None and po.delay_reason != status_data.delay_reason:
         changes.append({"field": "delay_reason", "old": po.delay_reason, "new": status_data.delay_reason})
         po.delay_reason = status_data.delay_reason
+        po.delay_reason_updated_by_id = current_user.id
+        po.delay_reason_updated_at = datetime.utcnow()
         changed = True
         
     if changed:

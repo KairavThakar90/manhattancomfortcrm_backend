@@ -190,6 +190,8 @@ class PurchaseOrder(Base):
     
     # Delay Tracking
     delay_reason = Column(Text, nullable=True)
+    delay_reason_updated_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    delay_reason_updated_at = Column(DateTime(timezone=True), nullable=True)
     delay_notification_sent = Column(Boolean, default=False)
     
     # Warehouse Info (ForeignKey to Warehouse table)
@@ -207,6 +209,7 @@ class PurchaseOrder(Base):
     warehouse = relationship("Warehouse", back_populates="purchase_orders")
     customer = relationship("Customer", backref="purchase_orders")
     channel = relationship("Channel", back_populates="purchase_orders")
+    delay_reason_user = relationship("User", foreign_keys=[delay_reason_updated_by_id])
     items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
     comments = relationship("PurchaseOrderComment", back_populates="purchase_order", cascade="all, delete-orphan")
 
