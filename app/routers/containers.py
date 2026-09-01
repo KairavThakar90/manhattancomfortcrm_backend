@@ -2,7 +2,7 @@
 Container API endpoints
 """
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, BackgroundTasks, Form, Request
 from sqlalchemy.orm import Session, joinedload
@@ -47,6 +47,34 @@ router = APIRouter(
 )
 
 
+def compute_container_status(
+    total_qty_in_container: int,
+    total_qty_received: int,
+    date_emptied: Optional[datetime],
+    date_dropped_off: Optional[datetime],
+    received_date: Optional[datetime] = None
+) -> tuple[str, str]:
+    """
+    Computes container status enum code and human-readable label.
+    Order of evaluation:
+    1. Fully Received: total_qty_received >= total_qty_in_container (and > 0), or received_date set when in_container == 0
+    2. Partially Received: 0 < total_qty_received < total_qty_in_container
+    3. Unloaded / Emptied: date_emptied is set
+    4. Picked Up: date_dropped_off is set
+    5. In Transit: default (no dates set)
+    Returns: (status_code, status_label)
+    """
+    if (total_qty_in_container > 0 and total_qty_received >= total_qty_in_container) or (total_qty_in_container == 0 and received_date is not None):
+        return ("FULLY_RECEIVED", "Fully Received")
+    if 0 < total_qty_received < total_qty_in_container:
+        return ("PARTIALLY_RECEIVED", "Partially Received")
+    if date_emptied is not None:
+        return ("UNLOADED_EMPTIED", "Unloaded/Emptied")
+    if date_dropped_off is not None:
+        return ("PICKED_UP", "Picked Up")
+    return ("IN_TRANSIT", "In Transit")
+
+
 # ---------------------------------------------------------------------------
 # GET /containers/  — paginated list with filters
 # ---------------------------------------------------------------------------
@@ -56,6 +84,7 @@ def list_containers(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(25, ge=1, le=200, description="Items per page"),
     received: Optional[bool] = Query(None, description="True = received only, False = not received, omit = all"),
+    container_status: Optional[str] = Query(None, description="Filter by container status: FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT (comma-separated for multiple)"),
     search: Optional[str] = Query(None, description="Search by container name (partial match)"),
     po_id: Optional[str] = Query(None, description="Filter by Purchase Order UUID"),
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
@@ -67,7 +96,7 @@ def list_containers(
     receive_date_to: Optional[datetime] = Query(None, description="Filter containers received on or before this date (alias for date_to)"),
     eta_from: Optional[datetime] = Query(None, description="Filter containers with ETA on or after this date"),
     eta_to: Optional[datetime] = Query(None, description="Filter containers with ETA on or before this date"),
-    sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status"),
+    sort_by: Optional[str] = Query(None, description="Sort by: eta_delivery, receive_date, status, date_emptied"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -76,6 +105,7 @@ def list_containers(
     Paginated list of all shipping containers with filters and summary counts.
 
     **Filters:**
+    - `container_status` — FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT
     - `received=true` — only containers with a received date
     - `received=false` — only containers NOT yet received (in transit / pending)
     - `search` — partial container name search (case-insensitive)
@@ -83,6 +113,8 @@ def list_containers(
     - `sellercloud_po_id` — containers linked to a specific PO (SC integer ID)
     - `vendor_id` — containers linked to POs from a specific vendor
     - `sellercloud_warehouse_id` — containers stored in a specific warehouse (SC integer ID)
+    - `sort_by` — `eta_delivery`, `receive_date`, `date_emptied`, `status`
+    - `sort_order` — `asc` or `desc`
 
     Each result includes:
     - `is_received` — boolean derived from received_date
@@ -104,6 +136,78 @@ def list_containers(
         query = query.filter(models.ShippingContainer.received_date.isnot(None))
     elif received is False:
         query = query.filter(models.ShippingContainer.received_date.is_(None))
+
+    # Filter by Container Status
+    if container_status:
+        requested_statuses = [
+            s.strip().upper().replace(" ", "_").replace("-", "_").replace("/", "_")
+            for s in container_status.split(",")
+            if s.strip()
+        ]
+        
+        from sqlalchemy import func, case, and_, or_
+        from app.models import PurchaseOrderItemContainer
+        
+        agg_sub = (
+            db.query(
+                PurchaseOrderItemContainer.shipping_container_id.label("c_id"),
+                func.coalesce(func.sum(PurchaseOrderItemContainer.qty_in_container), 0).label("tot_in"),
+                func.coalesce(func.sum(PurchaseOrderItemContainer.qty_received_container), 0).label("tot_recv"),
+            )
+            .group_by(PurchaseOrderItemContainer.shipping_container_id)
+            .subquery()
+        )
+        
+        tot_in_col = func.coalesce(agg_sub.c.tot_in, 0)
+        tot_recv_col = func.coalesce(agg_sub.c.tot_recv, 0)
+        
+        query = query.outerjoin(agg_sub, models.ShippingContainer.id == agg_sub.c.c_id)
+        
+        cond_map = {
+            "FULLY_RECEIVED": or_(
+                and_(tot_in_col > 0, tot_recv_col >= tot_in_col),
+                and_(tot_in_col == 0, models.ShippingContainer.received_date.isnot(None))
+            ),
+            "PARTIALLY_RECEIVED": and_(
+                tot_recv_col > 0,
+                tot_recv_col < tot_in_col
+            ),
+            "UNLOADED_EMPTIED": and_(
+                models.ShippingContainer.date_emptied.isnot(None),
+                tot_recv_col == 0,
+                models.ShippingContainer.received_date.is_(None)
+            ),
+            "PICKED_UP": and_(
+                models.ShippingContainer.date_dropped_off.isnot(None),
+                models.ShippingContainer.date_emptied.is_(None),
+                tot_recv_col == 0,
+                models.ShippingContainer.received_date.is_(None)
+            ),
+            "IN_TRANSIT": and_(
+                models.ShippingContainer.date_dropped_off.is_(None),
+                models.ShippingContainer.date_emptied.is_(None),
+                tot_recv_col == 0,
+                models.ShippingContainer.received_date.is_(None)
+            ),
+        }
+        
+        filter_exprs = []
+        for req in requested_statuses:
+            if req in cond_map:
+                filter_exprs.append(cond_map[req])
+            elif req in ("UNLOADED", "EMPTIED", "UNLOADED_EMPTIED"):
+                filter_exprs.append(cond_map["UNLOADED_EMPTIED"])
+            elif req in ("PICKED", "PICKEDUP", "PICKED_UP", "DROPPED_OFF", "DROPPEDOFF"):
+                filter_exprs.append(cond_map["PICKED_UP"])
+            elif req in ("TRANSIT", "INTRANSIT", "IN_TRANSIT"):
+                filter_exprs.append(cond_map["IN_TRANSIT"])
+            elif req in ("PARTIAL", "PARTIALLY", "PARTIAL_RECEIVED", "PARTIALLY_RECEIVED"):
+                filter_exprs.append(cond_map["PARTIALLY_RECEIVED"])
+            elif req in ("FULL", "FULLY", "FULL_RECEIVED", "FULLY_RECEIVED", "RECEIVED"):
+                filter_exprs.append(cond_map["FULLY_RECEIVED"])
+
+        if filter_exprs:
+            query = query.filter(or_(*filter_exprs))
 
     order_clauses = []
 
@@ -177,24 +281,51 @@ def list_containers(
             eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999))
         query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
 
-    if sort_by == "eta_delivery":
+    sort_by_clean = (sort_by or "").lower().replace("-", "_").replace(" ", "_").strip()
+    is_asc = sort_order and str(sort_order).lower().strip() in ("asc", "ascending", "1")
+
+    if sort_by_clean in ("eta_delivery", "etadelivery", "eta", "estimated_arrival_date"):
         sort_col = models.ShippingContainer.estimated_arrival_date
-    elif sort_by == "receive_date":
+    elif sort_by_clean in ("receive_date", "receivedate", "received_date", "receive"):
         sort_col = models.ShippingContainer.received_date
-    elif sort_by == "status":
+    elif sort_by_clean in ("date_emptied", "dateemptied", "emptied_date", "emptieddate", "emptied", "empty_date"):
+        sort_col = models.ShippingContainer.date_emptied
+    elif sort_by_clean in ("date_dropped_off", "datedroppedoff", "dropped_off_date", "dropped_off"):
+        sort_col = models.ShippingContainer.date_dropped_off
+    elif sort_by_clean in ("status", "is_received"):
         sort_col = models.ShippingContainer.received_date.is_(None)
+    elif sort_by_clean in ("container_name", "name", "container"):
+        sort_col = models.ShippingContainer.container_name
+    elif sort_by_clean in ("created_at", "createdat", "created"):
+        sort_col = models.ShippingContainer.created_at
     else:
         sort_col = None
 
-    if sort_col is not None:
-        if sort_order and sort_order.lower() == "asc":
-            order_clauses.append(sort_col.asc())
+    order_clauses = []
+    if sort_by_clean in ("date_emptied", "dateemptied", "emptied_date", "emptieddate", "emptied", "empty_date", "is_emptied", "has_date_emptied"):
+        if is_asc:
+            # Non-emptied first (date_emptied IS NULL), then emptied
+            order_clauses.append(models.ShippingContainer.date_emptied.isnot(None).asc())
+            order_clauses.append(models.ShippingContainer.date_emptied.asc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.desc())
         else:
-            order_clauses.append(sort_col.desc())
+            # Emptied containers first (date_emptied IS NOT NULL), then non-emptied
+            order_clauses.append(models.ShippingContainer.date_emptied.isnot(None).desc())
+            order_clauses.append(models.ShippingContainer.date_emptied.desc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.desc())
+    elif sort_col is not None:
+        if is_asc:
+            order_clauses.append(sort_col.asc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.asc())
+        else:
+            order_clauses.append(sort_col.desc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.desc())
+    else:
+        order_clauses.append(models.ShippingContainer.created_at.desc())
 
     total = query.count()
     containers = (
-        query.order_by(*order_clauses, models.ShippingContainer.created_at.desc())
+        query.order_by(*order_clauses)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -206,7 +337,7 @@ def list_containers(
         links = ctr.item_links  # loaded via relationship
         total_items = len(links)
         total_qty = sum(lnk.qty_in_container or 0 for lnk in links)
-        total_received = total_qty if ctr.received_date else 0
+        total_received = sum(lnk.qty_received_container or 0 for lnk in links)
         unique_po_ids = set()
         po_numbers_set = set()
         for lnk in links:
@@ -219,6 +350,14 @@ def list_containers(
         vendor_count = sum(1 for c in ctr.comments if c.category == "vendor_credit")
         total_comments = len(ctr.comments)
 
+        status_code, status_label = compute_container_status(
+            total_qty_in_container=total_qty,
+            total_qty_received=total_received,
+            date_emptied=ctr.date_emptied,
+            date_dropped_off=ctr.date_dropped_off,
+            received_date=ctr.received_date
+        )
+
         results.append(
             ContainerOut(
                 id=ctr.id,
@@ -227,6 +366,8 @@ def list_containers(
                 estimated_arrival_date=ctr.estimated_arrival_date,
                 received_date=ctr.received_date,
                 is_received=ctr.received_date is not None,
+                container_status=status_code,
+                container_status_label=status_label,
                 warehouse_id=ctr.warehouse_id,
                 warehouse=ctr.warehouse,
                 created_at=ctr.created_at,
@@ -716,6 +857,7 @@ def parse_mentions(text: str, db: Session) -> list[models.User]:
 @router.patch("/{container_id}")
 async def update_container(
     container_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -725,13 +867,34 @@ async def update_container(
     if current_user.role == "vendor":
         raise HTTPException(status_code=403, detail="Vendors cannot update container details")
     import json
-    if container_data:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body_dict = await request.json()
+            update_data = ContainerUpdate(**body_dict)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Invalid JSON payload: {e}")
+    elif container_data:
         try:
             update_data = ContainerUpdate(**json.loads(container_data))
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Invalid JSON in container_data: {e}")
     else:
-        update_data = ContainerUpdate()
+        try:
+            form = await request.form()
+            if "container_data" in form:
+                update_data = ContainerUpdate(**json.loads(form["container_data"]))
+            elif form:
+                form_dict = {k: v for k, v in form.items() if k != "files"}
+                update_data = ContainerUpdate(**form_dict)
+            else:
+                body_bytes = await request.body()
+                if body_bytes:
+                    update_data = ContainerUpdate(**json.loads(body_bytes.decode("utf-8")))
+                else:
+                    update_data = ContainerUpdate()
+        except Exception:
+            update_data = ContainerUpdate()
     """
     Update a container's name, estimated arrival date, or received date.
     Syncs the update to SellerCloud and saves it locally.
@@ -1261,6 +1424,10 @@ def get_container_details(
             c_recv = link.raw_json.get("QtyReceived", 0)
         c_recv = c_recv or 0
 
+        qty_in_cont = link.qty_in_container or 0
+        qty_recv_cont = c_recv
+        qty_missing_cont = max(0, qty_in_cont - qty_recv_cont)
+
         items_out.append(
             ContainerDetailItemOut(
                 po_item_id=item.id,
@@ -1271,8 +1438,9 @@ def get_container_details(
                 sku=item.sku,
                 product_name=item.product_name,
                 image_url=item.image_url,
-                qty_in_container=link.qty_in_container or 0,
-                qty_received_container=c_recv,
+                qty_in_container=qty_in_cont,
+                qty_received_container=qty_recv_cont,
+                qty_missing_container=qty_missing_cont,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
                 qty_remaining=max(0, item.qty_ordered - item.qty_received),
@@ -1281,8 +1449,24 @@ def get_container_details(
             )
         )
 
-    total_qty = sum(i.qty_in_container for i in items_out)
-    total_received_qty = total_qty if container.received_date else 0
+    # Sort items so that items with discrepancies (where received quantity differs from ordered/container qty) appear first:
+    def item_discrepancy_sort_key(itm: ContainerDetailItemOut):
+        has_container_diff = (itm.qty_in_container or 0) != (itm.qty_received_container or 0)
+        has_po_diff = (itm.qty_ordered or 0) != (itm.qty_received or 0)
+        has_diff = has_container_diff or has_po_diff
+        
+        container_diff_mag = abs((itm.qty_in_container or 0) - (itm.qty_received_container or 0))
+        po_diff_mag = abs((itm.qty_ordered or 0) - (itm.qty_received or 0))
+        max_diff_mag = max(container_diff_mag, po_diff_mag)
+        
+        # Discrepancy items first (0), sorted by largest difference (-max_diff_mag), then by SKU
+        return (0 if has_diff else 1, -max_diff_mag, itm.sku or "")
+
+    items_out.sort(key=item_discrepancy_sort_key)
+
+    total_qty = sum(i.qty_in_container or 0 for i in items_out)
+    total_received_qty = sum(i.qty_received_container or 0 for i in items_out)
+    total_missing_qty = max(0, total_qty - total_received_qty)
     unique_po_ids = set(
         str(link.item.purchase_order_id)
         for link in container.item_links
@@ -1298,6 +1482,14 @@ def get_container_details(
     vendor_credit_comments = [c for c in container.comments if c.category == "vendor_credit"]
     receiving_closure_comments = [c for c in container.comments if c.category == "receiving_closure"]
 
+    status_code, status_label = compute_container_status(
+        total_qty_in_container=total_qty,
+        total_qty_received=total_received_qty,
+        date_emptied=container.date_emptied,
+        date_dropped_off=container.date_dropped_off,
+        received_date=container.received_date
+    )
+
     return ContainerDetailOut(
         id=container.id,
         sellercloud_container_id=container.sellercloud_container_id,
@@ -1305,6 +1497,8 @@ def get_container_details(
         estimated_arrival_date=container.estimated_arrival_date,
         received_date=container.received_date,
         is_received=container.received_date is not None,
+        container_status=status_code,
+        container_status_label=status_label,
         created_at=container.created_at,
         updated_at=container.updated_at,
         warehouse=container.warehouse,
@@ -1326,8 +1520,15 @@ def get_container_details(
         factory_credit_needed=container.factory_credit_needed,
         summary={
             "total_items": len(items_out),
+            "container_status": status_code,
+            "container_status_label": status_label,
+            "total_assigned_quantity": total_qty,
+            "total_received_quantity": total_received_qty,
+            "missing_quantity": total_missing_qty,
+            "total_qty_assigned": total_qty,
             "total_qty_in_container": total_qty,
             "total_qty_received": total_received_qty,
+            "total_qty_missing": total_missing_qty,
             "unique_purchase_orders": len(unique_po_ids),
             "fully_received_items": fully_received_count,
             "pending_items": len(items_out) - fully_received_count,
@@ -1448,110 +1649,58 @@ def delete_container_attachment(
 # POST /containers/{container_id}/sync
 # Re-pull container info from SellerCloud
 # ---------------------------------------------------------------------------
-import httpx
-
+# ---------------------------------------------------------------------------
+# POST /containers/{container_id}/sync — Instant Full Container Sync
+# ---------------------------------------------------------------------------
 @router.post("/{container_id}/sync")
-def sync_container_from_sellercloud(
+def sync_specific_container(
     container_id: str,
+    sync_pos: bool = Query(True, description="Also refresh linked Purchase Orders from SellerCloud"),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
-    Re-sync a container from SellerCloud (name, ETA, received date).
-    Useful after changes are made directly in SellerCloud.
-    """
-    container = (
-        db.query(models.ShippingContainer)
-        .filter(resolve_container_filter(container_id))
-        .first()
-    )
-    if not container:
-        raise HTTPException(status_code=404, detail="Container not found")
+    **INSTANT SINGLE CONTAINER SYNC**
 
-    if not container.sellercloud_container_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Container has no SellerCloud ID — cannot sync",
-        )
+    Instantly syncs a specific shipping container and its items directly from SellerCloud:
+    1. Fetches live container status, dates, and warehouse from SellerCloud.
+    2. Discovers all items, `Qty`, and `QtyReceived` inside this container.
+    3. If `sync_pos=True`, automatically syncs/refreshes the linked Purchase Orders.
+    4. Updates local `shipping_containers` and `purchase_order_item_containers` link tables.
+    5. Recalculates PO item quantities and PO shipment statuses.
+
+    **Parameter `{container_id}` accepts:**
+    - SellerCloud Container ID (e.g. `5012`)
+    - Local Database UUID (e.g. `25af8811-e8e6-47e6-b18a-c7a58741f33c`)
+    - Container Name (e.g. `MEDU7337920`)
+    """
+    from app.services.sync_service import sync_single_container_full
+    from app.services.activity_service import log_activity
 
     try:
-        sc_client = SellerCloudClient()
-        sc_resp = sc_client.get(f"/api/ShippingContainers/{container.sellercloud_container_id}")
+        result = sync_single_container_full(db, container_identifier=container_id, sync_pos=sync_pos)
         
-        from app.services.sync_service import _get_or_create_warehouse
-
-        # SC response: { "Details": {ContainerName, EstimatedArrivalDate, ReceivedOnDate}, "Items": {...} }
-        sc = sc_resp.get("Details") or sc_resp
-
-        container.container_name = sc.get("ContainerName") or container.container_name
-
-        if sc.get("EstimatedArrivalDate"):
-            raw_dt = datetime.fromisoformat(sc["EstimatedArrivalDate"].replace("Z", ""))
-            container.estimated_arrival_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-
-        received_raw = sc.get("ReceivedOnDate") or sc.get("ReceivedDate")
-        if received_raw:
-            raw_dt = datetime.fromisoformat(received_raw.replace("Z", ""))
-            container.received_date = raw_dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
-
-        warehouse_sc_id = sc.get("ReceivingWarehouseID") or sc.get("ReceiveWarehouseID")
-        warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
-        if warehouse:
-            container.warehouse_id = warehouse.id
-
-        container.updated_at = datetime.utcnow()
-        db.commit()
-
-        return {
-            "success": True,
-            "message": "Container synced from SellerCloud",
-            "container": {
-                "id": str(container.id),
-                "sellercloud_container_id": container.sellercloud_container_id,
-                "container_name": container.container_name,
-                "estimated_arrival_date": (
-                    container.estimated_arrival_date.isoformat()
-                    if container.estimated_arrival_date
-                    else None
-                ),
-                "received_date": (
-                    container.received_date.isoformat() if container.received_date else None
-                ),
-                "warehouse_id": str(container.warehouse_id) if container.warehouse_id else None,
-                "warehouse": {
-                    "id": str(warehouse.id),
-                    "sellercloud_warehouse_id": warehouse.sellercloud_warehouse_id,
-                    "name": warehouse.name,
-                    "is_default": warehouse.is_default,
-                    "warehouse_type": warehouse.warehouse_type,
-                    "is_sellable": warehouse.is_sellable
-                } if warehouse else None
-            },
-        }
-
-    except httpx.HTTPStatusError as exc:
-        db.rollback()
-        if exc.response.status_code == 404:
-            # The container was deleted in SellerCloud, so delete it locally
-            db.delete(container)
-            db.commit()
-            return {
-                "success": True,
-                "message": "Container was deleted in SellerCloud and has been removed locally.",
-                "deleted": True
+        log_activity(
+            db,
+            action="SYNC_SINGLE_CONTAINER_INSTANT",
+            user_id=current_user.id,
+            entity_type="SHIPPING_CONTAINER",
+            entity_id=str(container_id),
+            details={
+                "container_name": result.get("container", {}).get("container_name"),
+                "sellercloud_container_id": result.get("container", {}).get("sellercloud_container_id"),
+                "total_items": result.get("container", {}).get("total_items"),
+                "total_qty_in_container": result.get("container", {}).get("total_qty_in_container"),
+                "total_qty_received_container": result.get("container", {}).get("total_qty_received_container"),
             }
-        return {
-            "success": False,
-            "message": "Error syncing from SellerCloud",
-            "error": str(exc)
-        }
-    except Exception as exc:
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
         db.rollback()
-        # Return structured error response instead of 500 so frontend can handle it
-        return {
-            "success": False,
-            "message": "Error syncing from SellerCloud",
-            "error": str(exc)
-        }
+        raise HTTPException(status_code=500, detail=f"Error syncing container '{container_id}': {str(e)}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -2779,3 +2928,7 @@ async def process_container_comment_tags(
             attachments=attachments,
             container_name=container_name
         )
+
+
+
+

@@ -329,6 +329,8 @@ class ContainerOut(BaseModel):
     estimated_arrival_date: Optional[datetime] = None
     received_date: Optional[datetime] = None
     is_received: bool = False           # True when received_date is not None
+    container_status: Optional[str] = "IN_TRANSIT"
+    container_status_label: Optional[str] = "In Transit"
     warehouse_id: Optional[uuid.UUID] = None
     warehouse: Optional[WarehouseOut] = None
     created_at: Optional[datetime] = None
@@ -397,6 +399,7 @@ class ContainerDetailItemOut(BaseModel):
     image_url: Optional[str] = None
     qty_in_container: int
     qty_received_container: int = 0
+    qty_missing_container: int = 0
     qty_ordered: int
     qty_received: int
     qty_remaining: int
@@ -426,6 +429,8 @@ class ContainerDetailOut(BaseModel):
     estimated_arrival_date: Optional[datetime] = None
     received_date: Optional[datetime] = None
     is_received: bool = False
+    container_status: Optional[str] = "IN_TRANSIT"
+    container_status_label: Optional[str] = "In Transit"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     warehouse: Optional[WarehouseOut] = None
@@ -844,6 +849,8 @@ class PurchaseOrderOut(BaseModel):
         # Populate delay_reason_updated_by and delay_reason_updated_at
         if hasattr(obj, 'delay_reason_user') and obj.delay_reason_user:
             instance.delay_reason_updated_by = obj.delay_reason_user.full_name or obj.delay_reason_user.first_name or obj.delay_reason_user.email
+        elif getattr(obj, 'delay_reason_updated_by', None):
+            instance.delay_reason_updated_by = obj.delay_reason_updated_by
         instance.delay_reason_updated_at = getattr(obj, 'delay_reason_updated_at', None)
         
         # 1. Check if invoice is delayed (missing after 10 days)
