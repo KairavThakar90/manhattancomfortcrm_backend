@@ -271,14 +271,21 @@ class SellerCloudClient:
         Update an existing shipping container in SellerCloud.
         PUT /api/ShippingContainers/{id}
         """
-        update_payload = {
-            "ContainerName": payload.get("ContainerName"),
-            "EstimatedArrivalDate": payload.get("EstimatedArrivalDate"),
-            "ShippedOn": payload.get("ReceivedDate"),
-            "ShippingStatus": payload.get("ShippingStatus", 1),
-        }
-        # Remove None values
-        update_payload = {k: v for k, v in update_payload.items() if v is not None}
+        if "GeneralDetails" in payload:
+            update_payload = payload
+        else:
+            gen_details = {
+                "ContainerName": payload.get("ContainerName"),
+                "EstimatedArrivalDate": payload.get("EstimatedArrivalDate"),
+                "ReceivingWarehouseID": payload.get("ReceivingWarehouseID") or payload.get("ReceiveWarehouseID") or payload.get("WarehouseID"),
+                "ShippingStatus": payload.get("ShippingStatus", 1),
+            }
+            gen_details = {k: v for k, v in gen_details.items() if v is not None}
+            update_payload = {"GeneralDetails": gen_details}
+            if "VesselInfo" in payload:
+                update_payload["VesselInfo"] = payload["VesselInfo"]
+            if "CostInfo" in payload:
+                update_payload["CostInfo"] = payload["CostInfo"]
         
         resp = self._request("PUT", f"/api/ShippingContainers/{container_id}", json=update_payload)
         
