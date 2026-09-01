@@ -302,7 +302,18 @@ def list_containers(
         sort_col = None
 
     order_clauses = []
-    if sort_col is not None:
+    if sort_by_clean in ("date_emptied", "dateemptied", "emptied_date", "emptieddate", "emptied", "empty_date", "is_emptied", "has_date_emptied"):
+        if is_asc:
+            # Non-emptied first (date_emptied IS NULL), then emptied
+            order_clauses.append(models.ShippingContainer.date_emptied.isnot(None).asc())
+            order_clauses.append(models.ShippingContainer.date_emptied.asc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.desc())
+        else:
+            # Emptied containers first (date_emptied IS NOT NULL), then non-emptied
+            order_clauses.append(models.ShippingContainer.date_emptied.isnot(None).desc())
+            order_clauses.append(models.ShippingContainer.date_emptied.desc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.desc())
+    elif sort_col is not None:
         if is_asc:
             order_clauses.append(sort_col.asc().nullslast())
             order_clauses.append(models.ShippingContainer.created_at.asc())
