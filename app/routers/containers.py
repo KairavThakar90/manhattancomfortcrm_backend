@@ -2779,7 +2779,8 @@ async def add_container_comment(
     
     # Process Tags and Mentions
     section_name = "Vendor Credit Needed" if category == "vendor_credit" else "Receiving Closure Notes"
-    link = f"{settings.FRONTEND_ORIGIN}/containers/{container.id}?comment_id={new_comment.id}"
+    frontend_base = settings.FRONTEND_ORIGIN.rstrip("/")
+    link = f"{frontend_base}/container-flow/{container.id}?category={category}&comment_id={new_comment.id}"
     
     await process_container_comment_tags(
         db=db,
@@ -2883,7 +2884,8 @@ async def update_container_comment(
     
     # Process Tags
     section_name = "Vendor Credit Needed" if comment.category == "vendor_credit" else "Receiving Closure Notes"
-    link = f"{settings.FRONTEND_ORIGIN}/containers/{container.id}?comment_id={comment.id}"
+    frontend_base = settings.FRONTEND_ORIGIN.rstrip("/")
+    link = f"{frontend_base}/container-flow/{container.id}?category={comment.category}&comment_id={comment.id}"
     
     await process_container_comment_tags(
         db=db,
