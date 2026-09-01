@@ -329,6 +329,8 @@ class ContainerOut(BaseModel):
     estimated_arrival_date: Optional[datetime] = None
     received_date: Optional[datetime] = None
     is_received: bool = False           # True when received_date is not None
+    container_status: Optional[str] = "IN_TRANSIT"
+    container_status_label: Optional[str] = "In Transit"
     warehouse_id: Optional[uuid.UUID] = None
     warehouse: Optional[WarehouseOut] = None
     created_at: Optional[datetime] = None
@@ -427,6 +429,8 @@ class ContainerDetailOut(BaseModel):
     estimated_arrival_date: Optional[datetime] = None
     received_date: Optional[datetime] = None
     is_received: bool = False
+    container_status: Optional[str] = "IN_TRANSIT"
+    container_status_label: Optional[str] = "In Transit"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     warehouse: Optional[WarehouseOut] = None

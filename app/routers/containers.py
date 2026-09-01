@@ -47,6 +47,34 @@ router = APIRouter(
 )
 
 
+def compute_container_status(
+    total_qty_in_container: int,
+    total_qty_received: int,
+    date_emptied: Optional[datetime],
+    date_dropped_off: Optional[datetime],
+    received_date: Optional[datetime] = None
+) -> tuple[str, str]:
+    """
+    Computes container status enum code and human-readable label.
+    Order of evaluation:
+    1. Fully Received: total_qty_received >= total_qty_in_container (and > 0), or received_date set when in_container == 0
+    2. Partially Received: 0 < total_qty_received < total_qty_in_container
+    3. Unloaded / Emptied: date_emptied is set
+    4. Picked Up: date_dropped_off is set
+    5. In Transit: default (no dates set)
+    Returns: (status_code, status_label)
+    """
+    if (total_qty_in_container > 0 and total_qty_received >= total_qty_in_container) or (total_qty_in_container == 0 and received_date is not None):
+        return ("FULLY_RECEIVED", "Fully Received")
+    if 0 < total_qty_received < total_qty_in_container:
+        return ("PARTIALLY_RECEIVED", "Partially Received")
+    if date_emptied is not None:
+        return ("UNLOADED_EMPTIED", "Unloaded/Emptied")
+    if date_dropped_off is not None:
+        return ("PICKED_UP", "Picked Up")
+    return ("IN_TRANSIT", "In Transit")
+
+
 # ---------------------------------------------------------------------------
 # GET /containers/  — paginated list with filters
 # ---------------------------------------------------------------------------
@@ -56,6 +84,7 @@ def list_containers(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(25, ge=1, le=200, description="Items per page"),
     received: Optional[bool] = Query(None, description="True = received only, False = not received, omit = all"),
+    container_status: Optional[str] = Query(None, description="Filter by container status: FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT (comma-separated for multiple)"),
     search: Optional[str] = Query(None, description="Search by container name (partial match)"),
     po_id: Optional[str] = Query(None, description="Filter by Purchase Order UUID"),
     sellercloud_po_id: Optional[int] = Query(None, description="Filter by SellerCloud PO integer ID"),
@@ -76,6 +105,7 @@ def list_containers(
     Paginated list of all shipping containers with filters and summary counts.
 
     **Filters:**
+    - `container_status` — FULLY_RECEIVED, PARTIALLY_RECEIVED, UNLOADED_EMPTIED, PICKED_UP, IN_TRANSIT
     - `received=true` — only containers with a received date
     - `received=false` — only containers NOT yet received (in transit / pending)
     - `search` — partial container name search (case-insensitive)
@@ -106,6 +136,78 @@ def list_containers(
         query = query.filter(models.ShippingContainer.received_date.isnot(None))
     elif received is False:
         query = query.filter(models.ShippingContainer.received_date.is_(None))
+
+    # Filter by Container Status
+    if container_status:
+        requested_statuses = [
+            s.strip().upper().replace(" ", "_").replace("-", "_").replace("/", "_")
+            for s in container_status.split(",")
+            if s.strip()
+        ]
+        
+        from sqlalchemy import func, case, and_, or_
+        from app.models import PurchaseOrderItemContainer
+        
+        agg_sub = (
+            db.query(
+                PurchaseOrderItemContainer.shipping_container_id.label("c_id"),
+                func.coalesce(func.sum(PurchaseOrderItemContainer.qty_in_container), 0).label("tot_in"),
+                func.coalesce(func.sum(PurchaseOrderItemContainer.qty_received_container), 0).label("tot_recv"),
+            )
+            .group_by(PurchaseOrderItemContainer.shipping_container_id)
+            .subquery()
+        )
+        
+        tot_in_col = func.coalesce(agg_sub.c.tot_in, 0)
+        tot_recv_col = func.coalesce(agg_sub.c.tot_recv, 0)
+        
+        query = query.outerjoin(agg_sub, models.ShippingContainer.id == agg_sub.c.c_id)
+        
+        cond_map = {
+            "FULLY_RECEIVED": or_(
+                and_(tot_in_col > 0, tot_recv_col >= tot_in_col),
+                and_(tot_in_col == 0, models.ShippingContainer.received_date.isnot(None))
+            ),
+            "PARTIALLY_RECEIVED": and_(
+                tot_recv_col > 0,
+                tot_recv_col < tot_in_col
+            ),
+            "UNLOADED_EMPTIED": and_(
+                models.ShippingContainer.date_emptied.isnot(None),
+                tot_recv_col == 0,
+                models.ShippingContainer.received_date.is_(None)
+            ),
+            "PICKED_UP": and_(
+                models.ShippingContainer.date_dropped_off.isnot(None),
+                models.ShippingContainer.date_emptied.is_(None),
+                tot_recv_col == 0,
+                models.ShippingContainer.received_date.is_(None)
+            ),
+            "IN_TRANSIT": and_(
+                models.ShippingContainer.date_dropped_off.is_(None),
+                models.ShippingContainer.date_emptied.is_(None),
+                tot_recv_col == 0,
+                models.ShippingContainer.received_date.is_(None)
+            ),
+        }
+        
+        filter_exprs = []
+        for req in requested_statuses:
+            if req in cond_map:
+                filter_exprs.append(cond_map[req])
+            elif req in ("UNLOADED", "EMPTIED", "UNLOADED_EMPTIED"):
+                filter_exprs.append(cond_map["UNLOADED_EMPTIED"])
+            elif req in ("PICKED", "PICKEDUP", "PICKED_UP", "DROPPED_OFF", "DROPPEDOFF"):
+                filter_exprs.append(cond_map["PICKED_UP"])
+            elif req in ("TRANSIT", "INTRANSIT", "IN_TRANSIT"):
+                filter_exprs.append(cond_map["IN_TRANSIT"])
+            elif req in ("PARTIAL", "PARTIALLY", "PARTIAL_RECEIVED", "PARTIALLY_RECEIVED"):
+                filter_exprs.append(cond_map["PARTIALLY_RECEIVED"])
+            elif req in ("FULL", "FULLY", "FULL_RECEIVED", "FULLY_RECEIVED", "RECEIVED"):
+                filter_exprs.append(cond_map["FULLY_RECEIVED"])
+
+        if filter_exprs:
+            query = query.filter(or_(*filter_exprs))
 
     order_clauses = []
 
@@ -237,6 +339,14 @@ def list_containers(
         vendor_count = sum(1 for c in ctr.comments if c.category == "vendor_credit")
         total_comments = len(ctr.comments)
 
+        status_code, status_label = compute_container_status(
+            total_qty_in_container=total_qty,
+            total_qty_received=total_received,
+            date_emptied=ctr.date_emptied,
+            date_dropped_off=ctr.date_dropped_off,
+            received_date=ctr.received_date
+        )
+
         results.append(
             ContainerOut(
                 id=ctr.id,
@@ -245,6 +355,8 @@ def list_containers(
                 estimated_arrival_date=ctr.estimated_arrival_date,
                 received_date=ctr.received_date,
                 is_received=ctr.received_date is not None,
+                container_status=status_code,
+                container_status_label=status_label,
                 warehouse_id=ctr.warehouse_id,
                 warehouse=ctr.warehouse,
                 created_at=ctr.created_at,
@@ -724,6 +836,7 @@ def parse_mentions(text: str, db: Session) -> list[models.User]:
 @router.patch("/{container_id}")
 async def update_container(
     container_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -733,13 +846,34 @@ async def update_container(
     if current_user.role == "vendor":
         raise HTTPException(status_code=403, detail="Vendors cannot update container details")
     import json
-    if container_data:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body_dict = await request.json()
+            update_data = ContainerUpdate(**body_dict)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Invalid JSON payload: {e}")
+    elif container_data:
         try:
             update_data = ContainerUpdate(**json.loads(container_data))
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Invalid JSON in container_data: {e}")
     else:
-        update_data = ContainerUpdate()
+        try:
+            form = await request.form()
+            if "container_data" in form:
+                update_data = ContainerUpdate(**json.loads(form["container_data"]))
+            elif form:
+                form_dict = {k: v for k, v in form.items() if k != "files"}
+                update_data = ContainerUpdate(**form_dict)
+            else:
+                body_bytes = await request.body()
+                if body_bytes:
+                    update_data = ContainerUpdate(**json.loads(body_bytes.decode("utf-8")))
+                else:
+                    update_data = ContainerUpdate()
+        except Exception:
+            update_data = ContainerUpdate()
     """
     Update a container's name, estimated arrival date, or received date.
     Syncs the update to SellerCloud and saves it locally.
@@ -1326,6 +1460,14 @@ def get_container_details(
     vendor_credit_comments = [c for c in container.comments if c.category == "vendor_credit"]
     receiving_closure_comments = [c for c in container.comments if c.category == "receiving_closure"]
 
+    status_code, status_label = compute_container_status(
+        total_qty_in_container=total_qty,
+        total_qty_received=total_received_qty,
+        date_emptied=container.date_emptied,
+        date_dropped_off=container.date_dropped_off,
+        received_date=container.received_date
+    )
+
     return ContainerDetailOut(
         id=container.id,
         sellercloud_container_id=container.sellercloud_container_id,
@@ -1333,6 +1475,8 @@ def get_container_details(
         estimated_arrival_date=container.estimated_arrival_date,
         received_date=container.received_date,
         is_received=container.received_date is not None,
+        container_status=status_code,
+        container_status_label=status_label,
         created_at=container.created_at,
         updated_at=container.updated_at,
         warehouse=container.warehouse,
@@ -1354,6 +1498,8 @@ def get_container_details(
         factory_credit_needed=container.factory_credit_needed,
         summary={
             "total_items": len(items_out),
+            "container_status": status_code,
+            "container_status_label": status_label,
             "total_assigned_quantity": total_qty,
             "total_received_quantity": total_received_qty,
             "missing_quantity": total_missing_qty,
