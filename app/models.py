@@ -430,6 +430,7 @@ class PurchaseOrderItemContainer(Base):
     purchase_order_item_id = Column(UUID(as_uuid=True), ForeignKey("purchase_order_items.id", ondelete="CASCADE"), nullable=False)
     shipping_container_id = Column(UUID(as_uuid=True), ForeignKey("shipping_containers.id", ondelete="CASCADE"), nullable=False)
     qty_in_container = Column(Integer, default=0)
+    qty_received_container = Column(Integer, default=0)
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 

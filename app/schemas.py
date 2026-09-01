@@ -253,6 +253,7 @@ class ContainerSummary(BaseModel):
     received_date: Optional[datetime] = None
     date_emptied: Optional[datetime] = None
     qty_in_container: Optional[int] = None
+    qty_received_container: Optional[int] = 0
 
 class ContainerAttachmentOut(BaseModel):
     id: uuid.UUID
@@ -395,6 +396,7 @@ class ContainerDetailItemOut(BaseModel):
     product_name: Optional[str] = None
     image_url: Optional[str] = None
     qty_in_container: int
+    qty_received_container: int = 0
     qty_ordered: int
     qty_received: int
     qty_remaining: int
@@ -612,7 +614,8 @@ class PurchaseOrderItemOut(BaseModel):
                         estimated_arrival_date=link.container.estimated_arrival_date,
                         received_date=link.container.received_date,
                         date_emptied=link.container.date_emptied,
-                        qty_in_container=link.qty_in_container
+                        qty_in_container=link.qty_in_container,
+                        qty_received_container=getattr(link, 'qty_received_container', 0) or 0
                     ))
             instance.containers = containers
         
