@@ -397,6 +397,7 @@ class ContainerDetailItemOut(BaseModel):
     image_url: Optional[str] = None
     qty_in_container: int
     qty_received_container: int = 0
+    qty_missing_container: int = 0
     qty_ordered: int
     qty_received: int
     qty_remaining: int

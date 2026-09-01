@@ -179,26 +179,40 @@ def list_containers(
             eta_to = datetime.combine(eta_to.date(), time(23, 59, 59, 999999))
         query = query.filter(models.ShippingContainer.estimated_arrival_date <= eta_to)
 
-    if sort_by == "eta_delivery":
+    sort_by_clean = (sort_by or "").lower().replace("-", "_").replace(" ", "_").strip()
+    is_asc = sort_order and str(sort_order).lower().strip() in ("asc", "ascending", "1")
+
+    if sort_by_clean in ("eta_delivery", "etadelivery", "eta", "estimated_arrival_date"):
         sort_col = models.ShippingContainer.estimated_arrival_date
-    elif sort_by == "receive_date":
+    elif sort_by_clean in ("receive_date", "receivedate", "received_date", "receive"):
         sort_col = models.ShippingContainer.received_date
-    elif sort_by in ("date_emptied", "emptied_date"):
+    elif sort_by_clean in ("date_emptied", "dateemptied", "emptied_date", "emptieddate", "emptied", "empty_date"):
         sort_col = models.ShippingContainer.date_emptied
-    elif sort_by == "status":
+    elif sort_by_clean in ("date_dropped_off", "datedroppedoff", "dropped_off_date", "dropped_off"):
+        sort_col = models.ShippingContainer.date_dropped_off
+    elif sort_by_clean in ("status", "is_received"):
         sort_col = models.ShippingContainer.received_date.is_(None)
+    elif sort_by_clean in ("container_name", "name", "container"):
+        sort_col = models.ShippingContainer.container_name
+    elif sort_by_clean in ("created_at", "createdat", "created"):
+        sort_col = models.ShippingContainer.created_at
     else:
         sort_col = None
 
+    order_clauses = []
     if sort_col is not None:
-        if sort_order and sort_order.lower() == "asc":
+        if is_asc:
             order_clauses.append(sort_col.asc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.asc())
         else:
             order_clauses.append(sort_col.desc().nullslast())
+            order_clauses.append(models.ShippingContainer.created_at.desc())
+    else:
+        order_clauses.append(models.ShippingContainer.created_at.desc())
 
     total = query.count()
     containers = (
-        query.order_by(*order_clauses, models.ShippingContainer.created_at.desc())
+        query.order_by(*order_clauses)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -210,7 +224,7 @@ def list_containers(
         links = ctr.item_links  # loaded via relationship
         total_items = len(links)
         total_qty = sum(lnk.qty_in_container or 0 for lnk in links)
-        total_received = total_qty if ctr.received_date else 0
+        total_received = sum(lnk.qty_received_container or 0 for lnk in links)
         unique_po_ids = set()
         po_numbers_set = set()
         for lnk in links:
@@ -1254,6 +1268,10 @@ def get_container_details(
             c_recv = link.raw_json.get("QtyReceived", 0)
         c_recv = c_recv or 0
 
+        qty_in_cont = link.qty_in_container or 0
+        qty_recv_cont = c_recv
+        qty_missing_cont = max(0, qty_in_cont - qty_recv_cont)
+
         items_out.append(
             ContainerDetailItemOut(
                 po_item_id=item.id,
@@ -1264,8 +1282,9 @@ def get_container_details(
                 sku=item.sku,
                 product_name=item.product_name,
                 image_url=item.image_url,
-                qty_in_container=link.qty_in_container or 0,
-                qty_received_container=c_recv,
+                qty_in_container=qty_in_cont,
+                qty_received_container=qty_recv_cont,
+                qty_missing_container=qty_missing_cont,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
                 qty_remaining=max(0, item.qty_ordered - item.qty_received),
@@ -1274,8 +1293,24 @@ def get_container_details(
             )
         )
 
-    total_qty = sum(i.qty_in_container for i in items_out)
-    total_received_qty = total_qty if container.received_date else 0
+    # Sort items so that items with discrepancies (where received quantity differs from ordered/container qty) appear first:
+    def item_discrepancy_sort_key(itm: ContainerDetailItemOut):
+        has_container_diff = (itm.qty_in_container or 0) != (itm.qty_received_container or 0)
+        has_po_diff = (itm.qty_ordered or 0) != (itm.qty_received or 0)
+        has_diff = has_container_diff or has_po_diff
+        
+        container_diff_mag = abs((itm.qty_in_container or 0) - (itm.qty_received_container or 0))
+        po_diff_mag = abs((itm.qty_ordered or 0) - (itm.qty_received or 0))
+        max_diff_mag = max(container_diff_mag, po_diff_mag)
+        
+        # Discrepancy items first (0), sorted by largest difference (-max_diff_mag), then by SKU
+        return (0 if has_diff else 1, -max_diff_mag, itm.sku or "")
+
+    items_out.sort(key=item_discrepancy_sort_key)
+
+    total_qty = sum(i.qty_in_container or 0 for i in items_out)
+    total_received_qty = sum(i.qty_received_container or 0 for i in items_out)
+    total_missing_qty = max(0, total_qty - total_received_qty)
     unique_po_ids = set(
         str(link.item.purchase_order_id)
         for link in container.item_links
@@ -1319,8 +1354,13 @@ def get_container_details(
         factory_credit_needed=container.factory_credit_needed,
         summary={
             "total_items": len(items_out),
+            "total_assigned_quantity": total_qty,
+            "total_received_quantity": total_received_qty,
+            "missing_quantity": total_missing_qty,
+            "total_qty_assigned": total_qty,
             "total_qty_in_container": total_qty,
             "total_qty_received": total_received_qty,
+            "total_qty_missing": total_missing_qty,
             "unique_purchase_orders": len(unique_po_ids),
             "fully_received_items": fully_received_count,
             "pending_items": len(items_out) - fully_received_count,
