@@ -170,6 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(purchase_order_statu
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status VARCHAR(50);
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE SET NULL;
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason TEXT;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason_updated_by_id UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason_updated_at TIMESTAMPTZ;
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_notification_sent BOOLEAN DEFAULT FALSE;
 
 -- ---------------------------------------------------------
