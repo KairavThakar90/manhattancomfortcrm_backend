@@ -117,6 +117,8 @@ def parse_date(date_str: Any) -> Optional[datetime]:
         return None
 
 
+
+
 def track_container(container_number: str, session: Optional[requests.Session] = None) -> Dict[str, Any]:
     """
     Aggregates shipment details and GPS coordinates for a container.
@@ -271,8 +273,10 @@ def sync_container_tracking(
         trucker_name = tracking_data["trucking_carrier"]
         container.trucking_company = trucker_name
         
-        # Auto-create logistics company if it doesn't exist
-        log_co = db.query(models.LogisticsCompany).filter(models.LogisticsCompany.name == trucker_name).first()
+        # Auto-create logistics company if it doesn't exist (case-insensitive check)
+        log_co = db.query(models.LogisticsCompany).filter(
+            models.LogisticsCompany.name.ilike(trucker_name.strip())
+        ).first()
         if not log_co:
             log_co = models.LogisticsCompany(name=trucker_name)
             db.add(log_co)

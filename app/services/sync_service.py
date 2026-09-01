@@ -389,6 +389,22 @@ def _get_customer_id_from_order_detail(db: Session, order_detail: dict) -> Optio
         db.flush()
         return new_customer.id
 
+def _get_or_create_customer(db: Session, customer_data: dict) -> Optional[models.Customer]:
+    """Helper to get existing customer by email or create new."""
+    email = customer_data.get("CustomerEmail") or customer_data.get("Email") or customer_data.get("email")
+    if not email:
+        return None
+    customer = db.query(models.Customer).filter(models.Customer.email.ilike(email)).first()
+    if not customer:
+        customer = models.Customer(
+            email=email,
+            first_name=customer_data.get("FirstName", ""),
+            last_name=customer_data.get("LastName", "")
+        )
+        db.add(customer)
+        db.flush()
+    return customer
+
 def _get_or_create_channel(db: Session, channel_name: str) -> Optional[models.Channel]:
     if not channel_name:
         return None
@@ -990,7 +1006,8 @@ def sync_containers(db: Session, po_id: int = None) -> dict:
                         link_fields = dict(
                             purchase_order_item_id=match.id,
                             shipping_container_id=container.id,
-                            qty_in_container=entry.get("Qty", 0),
+                            qty_in_container=entry.get("Qty", 0) or 0,
+                            qty_received_container=entry.get("QtyReceived", 0) or 0,
                             raw_json=entry,
                         )
                         if existing_link:
@@ -1111,3 +1128,206 @@ def sync_containers_for_all_pos(db: Session, limit: int = None) -> dict:
         "containers_synced": total_containers,
         "links_synced": total_links
     }
+
+
+def sync_single_po_full(db: Session, sellercloud_po_id: int) -> dict:
+    """
+    Full sync for a specific purchase order:
+    1. Fetches PO details and items from SellerCloud.
+    2. Maps related company, vendor, warehouse, customer, and channel.
+    3. Upserts PO and items into Neon database (preserving container link FKs).
+    4. Recalculates PO shipment status.
+    5. Discovers and syncs/resolves containers and links for all its items.
+    
+    Args:
+        db: Database session
+        sellercloud_po_id: SellerCloud PO ID (e.g. 12081)
+        
+    Returns:
+        dict with sync details (success, sellercloud_po_id, items_count, containers_synced, links_synced, etc.)
+    """
+    from app.services.po_service import recalculate_po_shipment_status
+
+    detail = sellercloud_client.get_purchase_order_detail(sellercloud_po_id)
+    if not detail:
+        raise ValueError(f"PO {sellercloud_po_id} not found in SellerCloud")
+    
+    mapped = _map_po(detail)
+    purchase = detail.get("Purchase") or {}
+    company_sc_id = purchase.get("CompanyId")
+    vendor_sc_id = purchase.get("VendorId")
+    
+    company = _get_or_create_company(db, company_sc_id)
+    vendor = _get_or_create_vendor(db, vendor_sc_id)
+    
+    warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
+    warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
+    
+    order_info = _extract_order_info_from_po_detail(db, detail)
+    customer_id = order_info["customer_id"]
+    channel_order_id = order_info["channel_order_id"]
+    channel_id = order_info["channel_id"]
+    
+    if (not customer_id or not channel_order_id) and mapped.get("purchase_title"):
+        try:
+            import re
+            match = re.search(r"Created for Order#\s*(\d+)", mapped["purchase_title"])
+            if match:
+                order_id = match.group(1)
+                order_detail = sellercloud_client.get_order(int(order_id)) if hasattr(sellercloud_client, 'get_order') else sellercloud_client.get_order_detail(order_id)
+                if order_detail:
+                    if not customer_id:
+                        customer_email = order_detail.get("CustomerEmail")
+                        if customer_email:
+                            customer = _get_or_create_customer(db, {"CustomerEmail": customer_email})
+                            if customer:
+                                customer_id = customer.id
+                    
+                    order_details_block = order_detail.get("OrderDetails", {})
+                    if not channel_order_id:
+                        channel_order_id = order_details_block.get("OrderSourceOrderId")
+                    if not channel_id:
+                        channel_name = _get_channel_name_from_order(order_detail)
+                        if channel_name and channel_name != "Unknown":
+                            channel = _get_or_create_channel(db, channel_name)
+                            if channel:
+                                channel_id = channel.id
+        except Exception as e:
+            print(f"Fallback order fetch failed for PO {sellercloud_po_id}: {e}")
+
+    existing_po = (
+        db.query(models.PurchaseOrder)
+        .filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id)
+        .first()
+    )
+    
+    if existing_po:
+        for key, val in mapped.items():
+            setattr(existing_po, key, val)
+        existing_po.company_id = company.id if company else None
+        existing_po.vendor_id = vendor.id if vendor else None
+        existing_po.warehouse_id = warehouse.id if warehouse else None
+        if customer_id:
+            existing_po.customer_id = customer_id
+        if channel_order_id:
+            existing_po.channel_order_id = channel_order_id
+        if channel_id:
+            existing_po.channel_id = channel_id
+        po_row = existing_po
+    else:
+        po_row = models.PurchaseOrder(
+            **mapped,
+            company_id=company.id if company else None,
+            vendor_id=vendor.id if vendor else None,
+            warehouse_id=warehouse.id if warehouse else None,
+            customer_id=customer_id,
+            channel_order_id=channel_order_id,
+            channel_id=channel_id
+        )
+        db.add(po_row)
+    
+    db.flush()
+    items = detail.get("Items") or []
+    if items:
+        _upsert_items(db, po_row.id, items)
+        
+    recalculate_po_shipment_status(db, str(po_row.id))
+    db.commit()
+    
+    # Step 2: Sync Containers and Link Items
+    container_result = sync_containers(db, po_id=sellercloud_po_id)
+    
+    return {
+        "success": True,
+        "sellercloud_po_id": sellercloud_po_id,
+        "items_count": len(items),
+        "containers_synced": container_result.get("containers_synced", 0),
+        "links_synced": container_result.get("links_synced", 0),
+        "synced_container_names": container_result.get("synced_container_names", [])
+    }
+
+
+def sync_all_db_purchase_orders(
+    db: Session,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    po_ids: Optional[List[int]] = None
+) -> dict:
+    """
+    Performs full sync (PO header, items, customer/channel, and shipping containers)
+    for all Purchase Orders currently in our database (or a filtered subset).
+    
+    Args:
+        db: Database session
+        limit: Max number of POs to sync
+        offset: Starting offset for POs in database
+        po_ids: Optional list of explicit PO IDs to sync (must exist in DB)
+        
+    Returns:
+        Summary dict containing statistics of the bulk sync operation.
+    """
+    query = (
+        db.query(models.PurchaseOrder.sellercloud_po_id)
+        .filter(models.PurchaseOrder.sellercloud_po_id.isnot(None))
+        .order_by(models.PurchaseOrder.sellercloud_po_id.desc())
+    )
+    
+    if po_ids:
+        query = query.filter(models.PurchaseOrder.sellercloud_po_id.in_(po_ids))
+    
+    if offset:
+        query = query.offset(offset)
+        
+    if limit:
+        query = query.limit(limit)
+        
+    records = query.all()
+    target_po_ids = [r[0] for r in records if r[0]]
+    
+    total_pos = len(target_po_ids)
+    pos_synced = 0
+    pos_failed = 0
+    total_items = 0
+    total_containers = 0
+    total_links = 0
+    errors = []
+    
+    print(f"[sync_all_db_purchase_orders] Starting full sync for {total_pos} POs in database...")
+    
+    for idx, sc_po_id in enumerate(target_po_ids, 1):
+        try:
+            print(f"[sync_all_db_purchase_orders] [{idx}/{total_pos}] Syncing PO {sc_po_id}...")
+            res = sync_single_po_full(db, sc_po_id)
+            pos_synced += 1
+            total_items += res.get("items_count", 0)
+            total_containers += res.get("containers_synced", 0)
+            total_links += res.get("links_synced", 0)
+        except Exception as e:
+            db.rollback()
+            pos_failed += 1
+            err_msg = str(e)
+            print(f"[sync_all_db_purchase_orders] Error syncing PO {sc_po_id}: {err_msg}")
+            errors.append({"sellercloud_po_id": sc_po_id, "error": err_msg})
+            
+    _log_sync(
+        db,
+        entity_type="purchase_orders_all_db_full",
+        status="success" if pos_failed == 0 else ("partial" if pos_synced > 0 else "failed"),
+        count=pos_synced,
+        message=f"Synced {pos_synced}/{total_pos} database POs ({total_containers} containers, {total_links} links, {pos_failed} failed)"
+    )
+    
+    return {
+        "success": pos_synced > 0 or total_pos == 0,
+        "message": f"Full sync completed for database POs: {pos_synced} succeeded, {pos_failed} failed out of {total_pos} total.",
+        "stats": {
+            "total_pos_in_db": total_pos,
+            "pos_synced": pos_synced,
+            "pos_failed": pos_failed,
+            "items_synced": total_items,
+            "containers_synced": total_containers,
+            "links_synced": total_links
+        },
+        "errors": errors
+    }
+

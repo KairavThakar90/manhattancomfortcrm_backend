@@ -14,7 +14,7 @@ from app.auth import get_current_user
 from app import models, schemas
 from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
 from app.services.email_service import send_tag_notification
-from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers
+from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers, sync_single_po_full, sync_all_db_purchase_orders
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
 from app.services.activity_service import log_activity
 
@@ -2694,6 +2694,58 @@ def trigger_single_po_sync(
         }
 
 
+@router.post("/sync-all")
+def trigger_all_database_pos_full_sync(
+    limit: Optional[int] = Query(None, description="Limit number of database POs to sync (for testing/batching)"),
+    offset: Optional[int] = Query(0, description="Offset for database POs list"),
+    po_ids: Optional[List[int]] = Query(None, description="Optional specific PO IDs to sync"),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    **FULL SYNC FOR ALL PURCHASE ORDERS IN DATABASE**
+    
+    Iterates over all Purchase Orders currently stored in the local database and:
+    1. Fetches updated PO details, statuses, dates, amounts, and item lines from SellerCloud
+    2. Updates vendor, company, warehouse, channel, and customer associations
+    3. Upserts all line items while preserving container associations
+    4. Recalculates PO shipment statuses
+    5. Discovers and syncs all shipping containers and container-item links for each PO
+    
+    Parameters:
+    - limit: (Optional) Max number of POs to sync
+    - offset: (Optional) Starting offset
+    - po_ids: (Optional) Specific PO IDs from database to sync
+    """
+    from app.services.sync_service import sync_all_db_purchase_orders
+    from app.services.activity_service import log_activity
+    
+    try:
+        result = sync_all_db_purchase_orders(db, limit=limit, offset=offset, po_ids=po_ids)
+        
+        log_activity(
+            db,
+            action="SYNC_ALL_DB_POS_FULL",
+            user_id=current_user.id,
+            entity_type="PURCHASE_ORDER",
+            entity_id="ALL",
+            details={
+                "pos_synced": result.get("stats", {}).get("pos_synced", 0),
+                "pos_failed": result.get("stats", {}).get("pos_failed", 0),
+                "containers_synced": result.get("stats", {}).get("containers_synced", 0)
+            }
+        )
+        
+        return result
+    except Exception as e:
+        db.rollback()
+        return {
+            "success": False,
+            "message": "Error performing full sync for database POs",
+            "error": str(e)
+        }
+
+
 @router.post("/{sellercloud_po_id}/sync-all")
 def trigger_full_po_sync(
     sellercloud_po_id: int,
@@ -2705,100 +2757,11 @@ def trigger_full_po_sync(
     1. Syncs PO details and items from SellerCloud.
     2. Syncs/resolves containers and links for all its items.
     """
-    from app.services.sync_service import _map_po, _get_or_create_company, _get_or_create_vendor, _upsert_items, _get_or_create_warehouse, sync_containers
-    from app.services.sellercloud_client import sellercloud_client
+    from app.services.sync_service import sync_single_po_full
     from app.services.activity_service import log_activity
     
     try:
-        # Step 1: Sync PO Details and Items
-        detail = sellercloud_client.get_purchase_order_detail(sellercloud_po_id)
-        if not detail:
-            raise HTTPException(status_code=404, detail=f"PO {sellercloud_po_id} not found in SellerCloud")
-        
-        mapped = _map_po(detail)
-        purchase = detail.get("Purchase") or {}
-        company_sc_id = purchase.get("CompanyId")
-        vendor_sc_id = purchase.get("VendorId")
-        
-        company = _get_or_create_company(db, company_sc_id)
-        vendor = _get_or_create_vendor(db, vendor_sc_id)
-        
-        warehouse_sc_id = mapped.pop("sellercloud_warehouse_id", None)
-        warehouse = _get_or_create_warehouse(db, warehouse_sc_id)
-        
-        from app.services.sync_service import _extract_order_info_from_po_detail, _get_or_create_channel
-        order_info = _extract_order_info_from_po_detail(db, detail)
-        customer_id = order_info["customer_id"]
-        channel_order_id = order_info["channel_order_id"]
-        channel_id = order_info["channel_id"]
-        
-        if (not customer_id or not channel_order_id) and mapped.get("purchase_title"):
-            try:
-                import re
-                match = re.search(r"Created for Order#\s*(\d+)", mapped["purchase_title"])
-                if match:
-                    order_id = match.group(1)
-                    order_detail = sellercloud_client.get_order_detail(order_id)
-                    if order_detail:
-                        if not customer_id:
-                            customer_email = order_detail.get("CustomerEmail")
-                            if customer_email:
-                                from app.services.sync_service import _get_or_create_customer
-                                customer = _get_or_create_customer(db, {"CustomerEmail": customer_email})
-                                if customer:
-                                    customer_id = customer.id
-                        
-                        order_details_block = order_detail.get("OrderDetails", {})
-                        if not channel_order_id:
-                            channel_order_id = order_details_block.get("OrderSourceOrderId")
-                        if not channel_id:
-                            from app.services.sync_service import _get_channel_name_from_order
-                            channel_name = _get_channel_name_from_order(order_detail)
-                            if channel_name and channel_name != "Unknown":
-                                channel = _get_or_create_channel(db, channel_name)
-                                if channel:
-                                    channel_id = channel.id
-            except Exception as e:
-                print(f"Fallback order fetch failed for PO {sellercloud_po_id}: {e}")
-
-        existing_po = (
-            db.query(models.PurchaseOrder)
-            .filter(models.PurchaseOrder.sellercloud_po_id == sellercloud_po_id)
-            .first()
-        )
-        
-        if existing_po:
-            for key, val in mapped.items():
-                setattr(existing_po, key, val)
-            existing_po.company_id = company.id if company else None
-            existing_po.vendor_id = vendor.id if vendor else None
-            existing_po.warehouse_id = warehouse.id if warehouse else None
-            if customer_id:
-                existing_po.customer_id = customer_id
-            if channel_order_id:
-                existing_po.channel_order_id = channel_order_id
-            if channel_id:
-                existing_po.channel_id = channel_id
-            po_row = existing_po
-        else:
-            po_row = models.PurchaseOrder(
-                **mapped,
-                company_id=company.id if company else None,
-                vendor_id=vendor.id if vendor else None,
-                warehouse_id=warehouse.id if warehouse else None,
-                customer_id=customer_id,
-                channel_order_id=channel_order_id,
-                channel_id=channel_id
-            )
-            db.add(po_row)
-        
-        db.flush()
-        items = detail.get("Items") or []
-        _upsert_items(db, po_row.id, items)
-        db.commit()
-        
-        # Step 2: Sync Containers and Link Items
-        container_result = sync_containers(db, po_id=sellercloud_po_id)
+        result = sync_single_po_full(db, sellercloud_po_id)
         
         log_activity(db, action="SYNC_PO_FULL", user_id=current_user.id, entity_type="PURCHASE_ORDER", entity_id=str(sellercloud_po_id))
         
@@ -2807,16 +2770,17 @@ def trigger_full_po_sync(
             "sellercloud_po_id": sellercloud_po_id,
             "status": "success",
             "message": f"Successfully performed full sync (PO + Containers) for PO {sellercloud_po_id}",
-            "items_count": len(items),
-            "containers_synced": container_result.get("containers_synced", 0),
-            "links_synced": container_result.get("links_synced", 0)
+            "items_count": result.get("items_count", 0),
+            "containers_synced": result.get("containers_synced", 0),
+            "links_synced": result.get("links_synced", 0),
+            "synced_container_names": result.get("synced_container_names", [])
         }
         
-    except HTTPException as e:
+    except ValueError as e:
         return {
             "success": False,
             "message": "PO not found",
-            "error": str(e.detail)
+            "error": str(e)
         }
     except Exception as e:
         db.rollback()
@@ -2825,6 +2789,7 @@ def trigger_full_po_sync(
             "message": "Error performing full sync",
             "error": str(e)
         }
+
 
 
 @router.post("/sync-containers")

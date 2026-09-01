@@ -1254,6 +1254,13 @@ def get_container_details(
     for link in container.item_links:
         item = link.item
         po = item.purchase_order if item else None
+        
+        # Determine container-specific received quantity
+        c_recv = getattr(link, "qty_received_container", None)
+        if c_recv is None and link.raw_json and isinstance(link.raw_json, dict):
+            c_recv = link.raw_json.get("QtyReceived", 0)
+        c_recv = c_recv or 0
+
         items_out.append(
             ContainerDetailItemOut(
                 po_item_id=item.id,
@@ -1265,6 +1272,7 @@ def get_container_details(
                 product_name=item.product_name,
                 image_url=item.image_url,
                 qty_in_container=link.qty_in_container or 0,
+                qty_received_container=c_recv,
                 qty_ordered=item.qty_ordered,
                 qty_received=item.qty_received,
                 qty_remaining=max(0, item.qty_ordered - item.qty_received),
