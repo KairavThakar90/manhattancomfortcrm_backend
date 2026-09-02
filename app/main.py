@@ -65,6 +65,7 @@ app.add_middleware(
 app.add_middleware(ActivityLoggingMiddleware)
 
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(auth.users_router, prefix="/api/v1")
 app.include_router(companies.router, prefix="/api/v1")
 app.include_router(customers.router, prefix="/api/v1")
 app.include_router(vendors.router, prefix="/api/v1")
@@ -75,6 +76,8 @@ app.include_router(activities.router, prefix="/api/v1")
 app.include_router(cron.router, prefix="/api/v1")
 app.include_router(channels.router)
 app.include_router(logistics.router, prefix="/api/v1")
+
+
 
 
 @app.get("/health")

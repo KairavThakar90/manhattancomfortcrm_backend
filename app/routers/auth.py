@@ -898,3 +898,35 @@ def exit_impersonation(
         is_impersonating=False,
         impersonator=None
     )
+
+
+# Alias Router for /api/v1/users/... (without requiring /auth prefix)
+users_router = APIRouter(prefix="/users", tags=["Users"])
+
+@users_router.get("/{user_id}/vendors", response_model=list[VendorOut])
+def get_user_vendors_direct(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Direct alias for /api/v1/users/{user_id}/vendors"""
+    return get_user_vendors(user_id=user_id, db=db, current_user=current_user)
+
+
+@users_router.get("/{user_id}", response_model=UserOut)
+def get_user_direct(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Direct alias for /api/v1/users/{user_id}"""
+    return get_user(user_id=user_id, db=db, current_user=current_user)
+
+
+@users_router.get("", response_model=list[UserOut])
+def get_all_users_direct(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Direct alias for /api/v1/users"""
+    return get_all_users(db=db, current_user=current_user)
