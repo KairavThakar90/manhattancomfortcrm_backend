@@ -19,7 +19,7 @@ from app.config import settings
 from app.schemas import (
     Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate, UserMentionOut,
     UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest, ColumnPreferencesOut,
-    VendorSummary, VendorOut
+    VendorSummary, VendorOut, ImpersonatorSummary, ImpersonationTokenResponse
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -556,13 +556,18 @@ def get_user(
     Get details of a specific user.
     Requires admin privileges or the user requesting their own details.
     """
-    if current_user.role != "admin" and str(current_user.id) != user_id:
+    try:
+        user_uuid = uuid.UUID(str(user_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid user ID format. Must be a valid UUID.")
+
+    if current_user.role != "admin" and current_user.id != user_uuid:
         raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
 
     user = db.query(models.User).options(
         joinedload(models.User.vendor),
         joinedload(models.User.warehouse)
-    ).filter(models.User.id == user_id).first()
+    ).filter(models.User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -579,10 +584,15 @@ def get_user_vendors(
     Get all vendors associated with a specific user.
     Requires admin privileges or the user requesting their own assigned vendors.
     """
-    if current_user.role != "admin" and str(current_user.id) != user_id:
+    try:
+        user_uuid = uuid.UUID(str(user_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid user ID format. Must be a valid UUID.")
+
+    if current_user.role != "admin" and current_user.id != user_uuid:
         raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.query(models.User).filter(models.User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -622,13 +632,18 @@ def update_user(
     Update a user's details.
     Requires admin privileges.
     """
-    if current_user.role != "admin" and str(current_user.id) != user_id:
+    try:
+        user_uuid = uuid.UUID(str(user_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid user ID format. Must be a valid UUID.")
+
+    if current_user.role != "admin" and current_user.id != user_uuid:
         raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
 
     user = db.query(models.User).options(
         joinedload(models.User.vendor),
         joinedload(models.User.warehouse)
-    ).filter(models.User.id == user_id).first()
+    ).filter(models.User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
@@ -762,3 +777,124 @@ def update_password(
     db.commit()
     
     return {"message": "Password updated successfully"}
+
+
+@router.post("/impersonate/{user_id}", response_model=ImpersonationTokenResponse)
+def impersonate_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Switch identity to another user (Admin only).
+    Generates a session token allowing an administrator to view and act as the target user.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only administrators can switch/impersonate users.")
+
+    try:
+        target_uuid = uuid.UUID(str(user_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid user ID format. Must be a valid UUID.")
+
+    if current_user.id == target_uuid:
+        raise HTTPException(status_code=400, detail="You cannot impersonate your own account.")
+
+    target_user = db.query(models.User).filter(models.User.id == target_uuid).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found.")
+    if not target_user.is_active:
+        raise HTTPException(status_code=400, detail="Cannot impersonate an inactive user account.")
+
+    if target_user.role == "admin":
+        raise HTTPException(status_code=400, detail="Cannot impersonate another administrator.")
+
+    if target_user.email == "googlecloudcron@manhattancomfort.com":
+        raise HTTPException(status_code=403, detail="Cannot impersonate system background accounts.")
+
+    # Create tokens embedded with impersonation metadata
+    impersonator_name = current_user.full_name or f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email
+    token_claims = {
+        "sub": str(target_user.id),
+        "is_impersonating": True,
+        "impersonator_id": str(current_user.id),
+        "impersonator_email": current_user.email,
+        "impersonator_name": impersonator_name
+    }
+    
+    access_token = auth_utils.create_access_token(data=token_claims)
+    refresh_token = auth_utils.create_refresh_token(data=token_claims)
+
+    log_activity(
+        db,
+        action="IMPERSONATE_USER",
+        user_id=current_user.id,
+        entity_type="USER",
+        entity_id=str(target_user.id),
+        details={"target_email": target_user.email, "target_role": target_user.role}
+    )
+
+    return ImpersonationTokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        user=enrich_user_out(target_user, db),
+        is_impersonating=True,
+        impersonator=ImpersonatorSummary(
+            id=current_user.id,
+            email=current_user.email,
+            full_name=impersonator_name
+        )
+    )
+
+
+@router.post("/exit-impersonation", response_model=ImpersonationTokenResponse)
+def exit_impersonation(
+    token: str = Depends(auth_utils.oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Switch back from impersonation to the original Administrator account.
+    """
+    payload = auth_utils.decode_token(token)
+    
+    if not payload.get("is_impersonating") or not payload.get("impersonator_id"):
+        raise HTTPException(status_code=400, detail="Current session is not an active impersonation session.")
+
+    try:
+        admin_uuid = uuid.UUID(str(payload["impersonator_id"]).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid impersonator ID in token.")
+
+    admin_user = db.query(models.User).filter(models.User.id == admin_uuid).first()
+    if not admin_user or not admin_user.is_active:
+        raise HTTPException(status_code=404, detail="Original administrator account not found or is inactive.")
+        
+    if admin_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Original user is no longer an administrator.")
+
+    # Generate fresh regular Admin tokens
+    admin_token_claims = {
+        "sub": str(admin_user.id)
+    }
+    access_token = auth_utils.create_access_token(data=admin_token_claims)
+    refresh_token = auth_utils.create_refresh_token(data=admin_token_claims)
+
+    target_user_id = payload.get("sub")
+    log_activity(
+        db,
+        action="EXIT_IMPERSONATION",
+        user_id=admin_user.id,
+        entity_type="USER",
+        entity_id=str(target_user_id) if target_user_id else None,
+        details={"exited_target_user_id": target_user_id}
+    )
+
+    return ImpersonationTokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        user=enrich_user_out(admin_user, db),
+        is_impersonating=False,
+        impersonator=None
+    )

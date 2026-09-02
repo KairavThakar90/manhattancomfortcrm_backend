@@ -73,6 +73,26 @@ class UserOut(BaseModel):
     warehouse: Optional['WarehouseOut'] = None
     country: Optional[str] = None
     phone: Optional[str] = None
+
+    @field_validator('vendor_ids', mode='before')
+    @classmethod
+    def sanitize_vendor_ids(cls, v: Any):
+        if not v:
+            return []
+        if isinstance(v, list):
+            valid_uuids = []
+            for item in v:
+                if not item or item == "None":
+                    continue
+                try:
+                    if isinstance(item, uuid.UUID):
+                        valid_uuids.append(item)
+                    else:
+                        valid_uuids.append(uuid.UUID(str(item).strip()))
+                except (ValueError, AttributeError):
+                    pass
+            return valid_uuids
+        return []
     payment_terms: Optional[str] = None
     container_lead_time_days: Optional[int] = None
     
@@ -156,6 +176,21 @@ class Token(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class ImpersonatorSummary(BaseModel):
+    id: uuid.UUID
+    email: EmailStr
+    full_name: Optional[str] = None
+
+
+class ImpersonationTokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserOut
+    is_impersonating: bool = False
+    impersonator: Optional[ImpersonatorSummary] = None
 
 
 class RefreshTokenRequest(BaseModel):

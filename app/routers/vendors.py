@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -100,10 +101,15 @@ def get_vendors_for_user(
     db: Session = Depends(get_db)
 ):
     """Get all vendors assigned to a specific user (admin or self)."""
-    if current_user.role != "admin" and str(current_user.id) != user_id:
+    try:
+        user_uuid = uuid.UUID(str(user_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid user ID format. Must be a valid UUID.")
+
+    if current_user.role != "admin" and current_user.id != user_uuid:
         raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.query(models.User).filter(models.User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -133,9 +139,14 @@ def get_vendors_for_user(
 @router.get("/{vendor_id}", response_model=VendorOut)
 def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
     """Get a specific vendor by ID."""
+    try:
+        v_uuid = uuid.UUID(str(vendor_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid vendor ID format. Must be a valid UUID.")
+
     vendor = (
         db.query(models.Vendor)
-        .filter(models.Vendor.id == vendor_id)
+        .filter(models.Vendor.id == v_uuid)
         .first()
     )
     if not vendor:
@@ -155,7 +166,12 @@ def update_vendor(
     Update vendor information.
     Allows updating name, country, phone, payment_terms, and lead_time.
     """
-    vendor = db.query(models.Vendor).filter(models.Vendor.id == vendor_id).first()
+    try:
+        v_uuid = uuid.UUID(str(vendor_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid vendor ID format. Must be a valid UUID.")
+
+    vendor = db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
     
