@@ -269,6 +269,23 @@ def sync_container_tracking(
     if tracking_data.get("eta"):
         container.estimated_arrival_date = tracking_data["eta"]
         
+        # Automatically sync updated ETA to SellerCloud
+        if container.sellercloud_container_id:
+            try:
+                from app.services.sellercloud_client import SellerCloudClient
+                sc_client = SellerCloudClient()
+                formatted_eta = tracking_data["eta"].strftime("%Y-%m-%dT12:00:00Z")
+                sc_wh_id = container.warehouse.sellercloud_warehouse_id if container.warehouse else None
+                sc_payload = {
+                    "ContainerName": container.container_name,
+                    "EstimatedArrivalDate": formatted_eta,
+                    "ReceivingWarehouseID": sc_wh_id,
+                    "ShippingStatus": 2 if container.received_date else 1
+                }
+                sc_client.update_shipping_container(container.sellercloud_container_id, sc_payload)
+            except Exception as e:
+                print(f"[allways_sync] Failed to sync ETA to SellerCloud for container {container.container_name} ({container.sellercloud_container_id}): {e}")
+        
     if tracking_data.get("trucking_carrier"):
         trucker_name = tracking_data["trucking_carrier"]
         container.trucking_company = trucker_name

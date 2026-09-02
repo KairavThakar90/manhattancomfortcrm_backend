@@ -122,10 +122,10 @@ async def send_tag_notification(
         details_html += f"<p style='margin: 0 0 5px 0;'><strong>SKU:</strong> {sku}</p>"
 
     button_html = ""
-    if not container_name:
+    if link:
         button_html = f"""
-        <p>Click the button below to view it in the dashboard:</p>
-        <a href="{link}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">View Comment</a>
+        <p style="margin-top: 20px;">Click the button below to view and reply to the comment in the dashboard:</p>
+        <a href="{link}" style="display: inline-block; padding: 12px 24px; background-color: #007bff; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 5px;">View Comment</a>
         """
 
     html = f"""
