@@ -179,6 +179,27 @@ class SellerCloudClient:
         resp = self._request("GET", f"/api/PurchaseOrders/{po_id}")
         return resp.json()
 
+    def create_purchase_order(self, payload: dict) -> int:
+        """
+        Create a new Purchase Order in SellerCloud.
+        POST /api/PurchaseOrders
+        Returns the created SellerCloud PO ID (integer).
+        """
+        resp = self._request("POST", "/api/PurchaseOrders", json=payload)
+        try:
+            data = resp.json()
+            if isinstance(data, int):
+                return data
+            if isinstance(data, dict):
+                return data.get("ID") or data.get("Id") or data.get("sellercloud_po_id")
+            if isinstance(data, str) and data.isdigit():
+                return int(data)
+            return int(data)
+        except Exception:
+            if resp.text and resp.text.strip().isdigit():
+                return int(resp.text.strip())
+            raise
+
     def update_purchase_order_warehouse(self, po_id: int, warehouse_id: int) -> bool:
         """Update a specific PO's receiving warehouse in SellerCloud."""
         payload = {

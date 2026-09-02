@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List, Union, Dict, Any
 
-from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field, field_validator
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field, Field, field_validator, model_validator
 
 
 # ---------- Auth ----------
@@ -17,20 +17,44 @@ class GoogleLoginRequest(BaseModel):
 
 class UserCreate(BaseModel):
     """Schema for creating a new user"""
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
     first_name: str
     last_name: str
     email: EmailStr
     password: str
     role: str = "user"  # Default role
-    vendor_id: Optional[uuid.UUID] = None
-    vendor_ids: Optional[List[uuid.UUID]] = None
-    warehouse_id: Optional[uuid.UUID] = None
+    vendor_id: Optional[Union[uuid.UUID, str]] = None
+    vendor_ids: Optional[List[Union[uuid.UUID, str]]] = None
+    warehouse_id: Optional[Union[uuid.UUID, str]] = None
     # New fields for vendor registration:
     vendor_name: Optional[str] = None
     country: Optional[str] = None
     phone: Optional[str] = None
     payment_terms: Optional[str] = None
     lead_time: Optional[int] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_vendor_inputs(cls, data: Any):
+        if isinstance(data, dict):
+            # Support camelCase
+            if "vendorId" in data and "vendor_id" not in data:
+                data["vendor_id"] = data.get("vendorId")
+            if "vendorIds" in data and "vendor_ids" not in data:
+                data["vendor_ids"] = data.get("vendorIds")
+            if "warehouseId" in data and "warehouse_id" not in data:
+                data["warehouse_id"] = data.get("warehouseId")
+            if "vendors" in data and not data.get("vendor_ids"):
+                raw_v = data.get("vendors")
+                if isinstance(raw_v, list):
+                    extracted = []
+                    for it in raw_v:
+                        if isinstance(it, dict) and "id" in it:
+                            extracted.append(it["id"])
+                        elif isinstance(it, (str, int)):
+                            extracted.append(it)
+                    data["vendor_ids"] = extracted
+        return data
 
 
 class UserOut(BaseModel):
@@ -75,13 +99,14 @@ class UserMentionOut(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     role: Optional[str] = None
-    vendor_id: Optional[uuid.UUID] = None
-    vendor_ids: Optional[List[uuid.UUID]] = None
-    warehouse_id: Optional[uuid.UUID] = None
+    vendor_id: Optional[Union[uuid.UUID, str]] = None
+    vendor_ids: Optional[List[Union[uuid.UUID, str]]] = None
+    warehouse_id: Optional[Union[uuid.UUID, str]] = None
     country: Optional[str] = None
     phone: Optional[str] = None
     payment_terms: Optional[str] = None
@@ -96,6 +121,29 @@ class UserUpdate(BaseModel):
     # Column Preferences
     po_columns: Optional[dict] = None
     container_columns: Optional[dict] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_vendor_inputs(cls, data: Any):
+        if isinstance(data, dict):
+            # Support camelCase
+            if "vendorId" in data and "vendor_id" not in data:
+                data["vendor_id"] = data.get("vendorId")
+            if "vendorIds" in data and "vendor_ids" not in data:
+                data["vendor_ids"] = data.get("vendorIds")
+            if "warehouseId" in data and "warehouse_id" not in data:
+                data["warehouse_id"] = data.get("warehouseId")
+            if "vendors" in data and not data.get("vendor_ids"):
+                raw_v = data.get("vendors")
+                if isinstance(raw_v, list):
+                    extracted = []
+                    for it in raw_v:
+                        if isinstance(it, dict) and "id" in it:
+                            extracted.append(it["id"])
+                        elif isinstance(it, (str, int)):
+                            extracted.append(it)
+                    data["vendor_ids"] = extracted
+        return data
 
 
 class ColumnPreferencesOut(BaseModel):
@@ -646,6 +694,28 @@ class PurchaseOrderItemOut(BaseModel):
             instance.containers = containers
         
         return instance
+
+
+class POCreateItem(BaseModel):
+    sku: str = Field(..., description="Product SKU / ID in SellerCloud")
+    qty_ordered: int = Field(..., ge=1, description="Quantity of units to order")
+    unit_price: Optional[float] = Field(0.0, ge=0.0, description="Cost per unit")
+    warehouse_id: Optional[Union[uuid.UUID, int, str]] = Field(None, description="Warehouse UUID or SellerCloud integer ID for this item")
+    item_notes: Optional[str] = Field(None, description="Item memo/notes")
+    qty_cases_ordered: Optional[int] = Field(0, ge=0)
+    qty_units_per_case: Optional[int] = Field(0, ge=0)
+    case_price: Optional[float] = Field(0.0, ge=0.0)
+
+
+class POCreate(BaseModel):
+    vendor_id: Union[uuid.UUID, int, str] = Field(..., description="Vendor UUID, SellerCloud Vendor ID, or Vendor Name")
+    company_id: Optional[Union[uuid.UUID, int, str]] = Field(None, description="Company UUID or SellerCloud Company ID. Defaults to first active company if omitted.")
+    warehouse_id: Optional[Union[uuid.UUID, int, str]] = Field(None, description="Default receiving warehouse UUID, SellerCloud Warehouse ID, or Warehouse Name")
+    purchase_title: Optional[str] = Field(None, description="Title / Description of the PO")
+    expected_delivery_date: Optional[datetime] = Field(None, description="Expected delivery date")
+    container_lead_time_days: Optional[int] = Field(None, description="Lead time days (defaults to vendor lead time if omitted)")
+    notes: Optional[str] = Field(None, description="Internal notes for this PO")
+    items: List[POCreateItem] = Field(..., min_length=1, description="List of items to order (at least 1 required)")
 
 
 class POCommentCreate(BaseModel):

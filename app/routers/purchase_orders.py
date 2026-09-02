@@ -12,13 +12,203 @@ from sqlalchemy import and_, or_, cast, String
 from app.database import get_db
 from app.auth import get_current_user
 from app import models, schemas
-from app.schemas import PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest, POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate, POItemCommentOut, POStatusUpdate, POItemQuantityUpdate, POItemForContainerOut, POItemBasicOut
+from app.schemas import (
+    PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest,
+    POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate,
+    POItemCommentOut, POStatusUpdate, POItemQuantityUpdate,
+    POItemForContainerOut, POItemBasicOut, POCreate, POCreateItem
+)
 from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers, sync_single_po_full, sync_all_db_purchase_orders
 from app.services.optimized_sync_service import OptimizedSyncService, get_sync_recommendations
 from app.services.activity_service import log_activity
 
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
+
+
+@router.post("", response_model=PurchaseOrderOut, status_code=201)
+@router.post("/", response_model=PurchaseOrderOut, status_code=201)
+def create_purchase_order(
+    po_data: POCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Create a new Purchase Order in SellerCloud and save it locally.
+    """
+    # 1. Resolve Vendor
+    vendor = None
+    v_raw = str(po_data.vendor_id).strip()
+    try:
+        v_uuid = uuid.UUID(v_raw)
+        vendor = db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first()
+    except ValueError:
+        if v_raw.isdigit():
+            vendor = db.query(models.Vendor).filter(models.Vendor.sellercloud_vendor_id == int(v_raw)).first()
+        else:
+            vendor = db.query(models.Vendor).filter(models.Vendor.name.ilike(v_raw)).first()
+            
+    if not vendor:
+        raise HTTPException(status_code=400, detail=f"Vendor '{po_data.vendor_id}' not found")
+        
+    if not vendor.sellercloud_vendor_id:
+        raise HTTPException(status_code=400, detail=f"Vendor '{vendor.name}' does not have a SellerCloud Vendor ID")
+
+    # Permission check for vendor role
+    if current_user.role == "vendor":
+        if vendor.id not in current_user.effective_vendor_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to create a Purchase Order for this vendor")
+
+    # 2. Resolve Company
+    company = None
+    if po_data.company_id:
+        c_raw = str(po_data.company_id).strip()
+        try:
+            c_uuid = uuid.UUID(c_raw)
+            company = db.query(models.Company).filter(models.Company.id == c_uuid).first()
+        except ValueError:
+            if c_raw.isdigit():
+                company = db.query(models.Company).filter(models.Company.sellercloud_company_id == int(c_raw)).first()
+            else:
+                company = db.query(models.Company).filter(models.Company.name.ilike(c_raw)).first()
+    if not company:
+        company = db.query(models.Company).order_by(models.Company.created_at.asc()).first()
+    if not company or not company.sellercloud_company_id:
+        raise HTTPException(status_code=400, detail="Company not found or missing SellerCloud Company ID")
+
+    # 3. Resolve Warehouse
+    warehouse = None
+    from app.routers.containers import resolve_warehouse_helper
+    if po_data.warehouse_id:
+        warehouse = resolve_warehouse_helper(db, warehouse_id=po_data.warehouse_id)
+
+    # 4. Construct SellerCloud Payload
+    sc_products = []
+    for it in po_data.items:
+        item_wh_id = warehouse.sellercloud_warehouse_id if warehouse else None
+        if it.warehouse_id:
+            wh_item = resolve_warehouse_helper(db, warehouse_id=it.warehouse_id)
+            if wh_item and wh_item.sellercloud_warehouse_id:
+                item_wh_id = wh_item.sellercloud_warehouse_id
+
+        p_entry = {
+            "ProductID": it.sku.strip(),
+            "QtyUnitsOrdered": it.qty_ordered,
+            "UnitPrice": float(it.unit_price or 0.0)
+        }
+        if item_wh_id:
+            p_entry["WarehouseID"] = item_wh_id
+        if it.item_notes:
+            p_entry["ItemNotes"] = it.item_notes
+        if it.qty_cases_ordered:
+            p_entry["QtyCasesOrdered"] = it.qty_cases_ordered
+        if it.qty_units_per_case:
+            p_entry["QtyUnitsPerCase"] = it.qty_units_per_case
+        if it.case_price:
+            p_entry["CasePrice"] = float(it.case_price)
+        sc_products.append(p_entry)
+
+    sc_payload = {
+        "CompanyID": company.sellercloud_company_id,
+        "VendorID": vendor.sellercloud_vendor_id,
+        "POType": "PurchaseOrder",
+        "CaseQtyMode": any(bool(it.qty_cases_ordered) for it in po_data.items),
+        "Products": sc_products
+    }
+    if warehouse and warehouse.sellercloud_warehouse_id:
+        sc_payload["DefaultWarehouseID"] = warehouse.sellercloud_warehouse_id
+    if po_data.purchase_title:
+        sc_payload["Description"] = po_data.purchase_title
+    if po_data.notes:
+        sc_payload["VendorNote"] = po_data.notes
+    if po_data.expected_delivery_date:
+        sc_payload["ExpectedDeliveryDate"] = po_data.expected_delivery_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 5. Call SellerCloud API
+    from app.services.sellercloud_client import sellercloud_client
+    try:
+        sc_po_id = sellercloud_client.create_purchase_order(sc_payload)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to create Purchase Order in SellerCloud: {str(e)}")
+
+    # 6. Save in Local Database
+    total_amount = sum(it.qty_ordered * (it.unit_price or 0.0) for it in po_data.items)
+    lead_time = po_data.container_lead_time_days if po_data.container_lead_time_days is not None else vendor.container_lead_time_days
+
+    new_po = models.PurchaseOrder(
+        sellercloud_po_id=sc_po_id,
+        purchase_title=po_data.purchase_title or f"PO #{sc_po_id}",
+        company_id=company.id,
+        vendor_id=vendor.id,
+        warehouse_id=warehouse.id if warehouse else None,
+        purchase_order_status_code=100,  # Open / In Process
+        receiving_status_code=0,
+        status_label="Not Started",
+        status="NOT_STARTED",
+        created_on=datetime.utcnow(),
+        date_ordered=datetime.utcnow(),
+        expected_delivery_date=po_data.expected_delivery_date,
+        container_lead_time_days=lead_time,
+        total_amount=total_amount,
+        currency="USD",
+        notes=po_data.notes
+    )
+    db.add(new_po)
+    db.flush()
+
+    for it in po_data.items:
+        new_item = models.PurchaseOrderItem(
+            purchase_order_id=new_po.id,
+            sku=it.sku.strip(),
+            product_name=it.sku.strip(),
+            qty_ordered=it.qty_ordered,
+            qty_received=0,
+            qty_in_container=0,
+            unit_price=it.unit_price or 0.0,
+            qty_cases_ordered=it.qty_cases_ordered or 0,
+            qty_units_per_case=it.qty_units_per_case or 0,
+            case_price=it.case_price or 0.0,
+            expected_delivery_date=po_data.expected_delivery_date
+        )
+        db.add(new_item)
+
+    db.commit()
+    
+    # Reload with full relations for response model
+    po = (
+        db.query(models.PurchaseOrder)
+        .options(
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.company),
+            joinedload(models.PurchaseOrder.warehouse),
+            joinedload(models.PurchaseOrder.channel),
+            joinedload(models.PurchaseOrder.customer),
+            joinedload(models.PurchaseOrder.delay_reason_user),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
+            joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user),
+            joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.attachments)
+        )
+        .filter(models.PurchaseOrder.id == new_po.id)
+        .first()
+    )
+
+    try:
+        log_activity(
+            db,
+            action="CREATE_PO",
+            user_id=current_user.id,
+            entity_type="PURCHASE_ORDER",
+            entity_id=str(new_po.id),
+            details={
+                "sellercloud_po_id": sc_po_id,
+                "vendor_name": vendor.name,
+                "items_count": len(po_data.items)
+            }
+        )
+    except Exception:
+        pass
+
+    return PurchaseOrderOut.model_validate(po)
 
 
 async def process_comment_tags(db, tagged_user_ids, commenter_name, link, background_tasks, is_edit=False, section="Purchase Orders", po_number=None, sku=None, comment_text="", attachments=None):

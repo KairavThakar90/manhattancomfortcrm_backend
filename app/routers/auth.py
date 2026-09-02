@@ -60,6 +60,25 @@ def enrich_users_out(users: list[models.User], db: Session) -> list[UserOut]:
     return results
 
 
+def resolve_vendor_helper(db: Session, raw_id: Any) -> Optional[models.Vendor]:
+    """Helper to resolve a Vendor by UUID, SellerCloud Integer ID, or Name."""
+    if not raw_id:
+        return None
+    raw_str = str(raw_id).strip()
+    try:
+        v_uuid = uuid.UUID(raw_str)
+        vendor = db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first()
+        if vendor:
+            return vendor
+    except ValueError:
+        pass
+    if raw_str.isdigit():
+        vendor = db.query(models.Vendor).filter(models.Vendor.sellercloud_vendor_id == int(raw_str)).first()
+        if vendor:
+            return vendor
+    return db.query(models.Vendor).filter(models.Vendor.name.ilike(raw_str)).first()
+
+
 @router.post("/login", response_model=Union[Login2FAResponse, Token])
 def login(background_tasks: BackgroundTasks, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
@@ -396,22 +415,22 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
     resolved_vendor_ids = []
     if user_data.role == "vendor":
         if user_data.vendor_ids:
-            for vid in user_data.vendor_ids:
-                vendor_exists = db.query(models.Vendor).filter(models.Vendor.id == vid).first()
-                if not vendor_exists:
+            for raw_vid in user_data.vendor_ids:
+                v_obj = resolve_vendor_helper(db, raw_vid)
+                if not v_obj:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Vendor with ID {vid} not found"
+                        detail=f"Vendor '{raw_vid}' not found"
                     )
-                resolved_vendor_ids.append(str(vid))
+                resolved_vendor_ids.append(str(v_obj.id))
         elif user_data.vendor_id:
-            vendor_exists = db.query(models.Vendor).filter(models.Vendor.id == user_data.vendor_id).first()
-            if not vendor_exists:
+            v_obj = resolve_vendor_helper(db, user_data.vendor_id)
+            if not v_obj:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Vendor not found"
+                    detail=f"Vendor '{user_data.vendor_id}' not found"
                 )
-            resolved_vendor_ids.append(str(user_data.vendor_id))
+            resolved_vendor_ids.append(str(v_obj.id))
         else:
             # If vendor_id is not provided, create a new vendor using the provided fields
             v_name = user_data.vendor_name or f"{user_data.first_name} {user_data.last_name}"
@@ -573,17 +592,17 @@ def update_user(
         raw_vids = update_data.pop("vendor_ids")
         if raw_vids is not None:
             if isinstance(raw_vids, list):
-                str_vids = [str(vid) for vid in raw_vids if vid]
+                list_vids = raw_vids
             else:
-                str_vids = [str(raw_vids)]
-            # Validate each vendor
-            for vid_str in str_vids:
-                try:
-                    v_uuid = uuid.UUID(vid_str)
-                    if not db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first():
-                        raise HTTPException(status_code=400, detail=f"Vendor {vid_str} not found")
-                except ValueError:
-                    raise HTTPException(status_code=400, detail=f"Invalid vendor UUID: {vid_str}")
+                list_vids = [raw_vids]
+            str_vids = []
+            for raw_vid in list_vids:
+                if not raw_vid:
+                    continue
+                v_obj = resolve_vendor_helper(db, raw_vid)
+                if not v_obj:
+                    raise HTTPException(status_code=400, detail=f"Vendor '{raw_vid}' not found")
+                str_vids.append(str(v_obj.id))
             user.vendor_ids = str_vids
             user.vendor_id = uuid.UUID(str_vids[0]) if str_vids else None
         else:
@@ -594,11 +613,11 @@ def update_user(
     elif "vendor_id" in update_data:
         raw_vid = update_data.get("vendor_id")
         if raw_vid is not None:
-            v_exists = db.query(models.Vendor).filter(models.Vendor.id == raw_vid).first()
-            if not v_exists:
-                raise HTTPException(status_code=400, detail="Vendor not found")
-            user.vendor_id = raw_vid
-            user.vendor_ids = [str(raw_vid)]
+            v_obj = resolve_vendor_helper(db, raw_vid)
+            if not v_obj:
+                raise HTTPException(status_code=400, detail=f"Vendor '{raw_vid}' not found")
+            user.vendor_id = v_obj.id
+            user.vendor_ids = [str(v_obj.id)]
         else:
             user.vendor_id = None
             user.vendor_ids = []
