@@ -498,6 +498,7 @@ class UserActivityLog(Base):
     entity_type = Column(String(50), nullable=True)  # e.g., PURCHASE_ORDER, CONTAINER
     entity_id = Column(String(255), nullable=True)  # ID of the affected entity
     details = Column(JSONB, nullable=True)  # Extra context
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     user = relationship("User", backref="activity_logs")
 
 
