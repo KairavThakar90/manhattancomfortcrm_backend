@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timedelta
 import random
 import httpx
-from typing import Union, Optional
+from typing import Union, Optional, Any, List, Dict
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -19,7 +19,7 @@ from app.config import settings
 from app.schemas import (
     Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate, UserMentionOut,
     UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest, ColumnPreferencesOut,
-    VendorSummary
+    VendorSummary, VendorOut
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -308,6 +308,35 @@ def read_current_user(current_user=Depends(auth_utils.get_current_user), db: Ses
     return enrich_user_out(current_user, db)
 
 
+@router.get("/me/vendors", response_model=list[VendorOut])
+def get_current_user_vendors(
+    current_user: models.User = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all vendors associated with the currently authenticated user."""
+    effective_ids = current_user.effective_vendor_ids
+    if not effective_ids:
+        return []
+
+    from sqlalchemy import func
+    rows = db.query(
+        models.Vendor,
+        func.count(models.PurchaseOrder.id).label('po_count')
+    ).outerjoin(
+        models.PurchaseOrder, models.Vendor.id == models.PurchaseOrder.vendor_id
+    ).filter(
+        models.Vendor.id.in_(effective_ids)
+    ).group_by(models.Vendor.id).order_by(models.Vendor.name).all()
+
+    results = []
+    for vendor, po_count in rows:
+        v_dict = VendorOut.model_validate(vendor).model_dump(mode='python')
+        v_dict['po_count'] = po_count
+        results.append(v_dict)
+
+    return results
+
+
 @router.get("/me/column-preferences", response_model=ColumnPreferencesOut)
 def get_user_column_preferences(current_user=Depends(auth_utils.get_current_user)):
     """Get the current user's column preferences for PO and Container listings."""
@@ -538,6 +567,46 @@ def get_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     return enrich_user_out(user, db)
+
+
+@router.get("/users/{user_id}/vendors", response_model=list[VendorOut])
+def get_user_vendors(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """
+    Get all vendors associated with a specific user.
+    Requires admin privileges or the user requesting their own assigned vendors.
+    """
+    if current_user.role != "admin" and str(current_user.id) != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    effective_ids = user.effective_vendor_ids
+    if not effective_ids:
+        return []
+
+    from sqlalchemy import func
+    rows = db.query(
+        models.Vendor,
+        func.count(models.PurchaseOrder.id).label('po_count')
+    ).outerjoin(
+        models.PurchaseOrder, models.Vendor.id == models.PurchaseOrder.vendor_id
+    ).filter(
+        models.Vendor.id.in_(effective_ids)
+    ).group_by(models.Vendor.id).order_by(models.Vendor.name).all()
+
+    results = []
+    for vendor, po_count in rows:
+        v_dict = VendorOut.model_validate(vendor).model_dump(mode='python')
+        v_dict['po_count'] = po_count
+        results.append(v_dict)
+
+    return results
 
 
 @router.post("/users/{user_id}", response_model=UserOut)

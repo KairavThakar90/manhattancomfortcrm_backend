@@ -64,6 +64,72 @@ def list_vendors(
     )
 
 
+@router.get("/me", response_model=list[VendorOut])
+def get_my_vendors(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all vendors assigned to the currently logged in user."""
+    effective_ids = current_user.effective_vendor_ids
+    if not effective_ids:
+        return []
+
+    from sqlalchemy import func
+    rows = db.query(
+        models.Vendor,
+        func.count(models.PurchaseOrder.id).label('po_count')
+    ).outerjoin(
+        models.PurchaseOrder, models.Vendor.id == models.PurchaseOrder.vendor_id
+    ).filter(
+        models.Vendor.id.in_(effective_ids)
+    ).group_by(models.Vendor.id).order_by(models.Vendor.name).all()
+
+    results = []
+    for vendor, po_count in rows:
+        v_dict = VendorOut.model_validate(vendor).model_dump(mode='python')
+        v_dict['po_count'] = po_count
+        results.append(v_dict)
+
+    return results
+
+
+@router.get("/user/{user_id}", response_model=list[VendorOut])
+def get_vendors_for_user(
+    user_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all vendors assigned to a specific user (admin or self)."""
+    if current_user.role != "admin" and str(current_user.id) != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized. Admin or own account only.")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    effective_ids = user.effective_vendor_ids
+    if not effective_ids:
+        return []
+
+    from sqlalchemy import func
+    rows = db.query(
+        models.Vendor,
+        func.count(models.PurchaseOrder.id).label('po_count')
+    ).outerjoin(
+        models.PurchaseOrder, models.Vendor.id == models.PurchaseOrder.vendor_id
+    ).filter(
+        models.Vendor.id.in_(effective_ids)
+    ).group_by(models.Vendor.id).order_by(models.Vendor.name).all()
+
+    results = []
+    for vendor, po_count in rows:
+        v_dict = VendorOut.model_validate(vendor).model_dump(mode='python')
+        v_dict['po_count'] = po_count
+        results.append(v_dict)
+
+    return results
+
+
 @router.get("/{vendor_id}", response_model=VendorOut)
 def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
     """Get a specific vendor by ID."""
