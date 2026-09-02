@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
+from app import schemas
 from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses, activities, cron, channels, logistics
 from app.middleware.activity_logger import ActivityLoggingMiddleware
 
@@ -75,6 +76,15 @@ app.include_router(activities.router, prefix="/api/v1")
 app.include_router(cron.router, prefix="/api/v1")
 app.include_router(channels.router)
 app.include_router(logistics.router, prefix="/api/v1")
+
+# Alias: some clients call /api/v1/users/{user_id}/vendors without the /auth prefix.
+app.add_api_route(
+    "/api/v1/users/{user_id}/vendors",
+    auth.get_user_vendors,
+    methods=["GET"],
+    response_model=list[schemas.VendorOut],
+    tags=["Vendors"],
+)
 
 
 @app.get("/health")
