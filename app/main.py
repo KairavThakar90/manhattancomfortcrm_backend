@@ -4,8 +4,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
-from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses, activities, cron, channels, logistics
+from app.database import engine, Base
+from app import models
+from app.routers import (
+    auth, companies, customers, vendors, purchase_orders, containers,
+    warehouses, activities, cron, channels, logistics, products
+)
 from app.middleware.activity_logger import ActivityLoggingMiddleware
+
+# Automatically create tables if not existing
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
 
@@ -76,6 +84,7 @@ app.include_router(activities.router, prefix="/api/v1")
 app.include_router(cron.router, prefix="/api/v1")
 app.include_router(channels.router)
 app.include_router(logistics.router, prefix="/api/v1")
+app.include_router(products.router, prefix="/api/v1")
 
 
 

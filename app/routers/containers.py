@@ -414,6 +414,9 @@ def list_containers(
                 warehouse=ctr.warehouse,
                 created_at=ctr.created_at,
                 updated_at=ctr.updated_at,
+                created_by_user_id=ctr.created_by_user_id,
+                created_from=ctr.created_from or "SELLERCLOUD_SYNC",
+                created_by_user=ctr.created_by_user,
                 date_dropped_off=ctr.date_dropped_off,
                 door=ctr.door,
                 trucker_email=ctr.trucker_email,
@@ -568,6 +571,7 @@ def get_po_items_for_container(
 def create_container(
     container_data: ContainerCreate,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     """
     Create a new shipping container, sync it to SellerCloud, and link PO items.
@@ -773,6 +777,8 @@ def create_container(
         country_of_origin=container_data.country_of_origin,
         receiving_closure_notes=container_data.receiving_closure_notes,
         factory_credit_needed=container_data.factory_credit_needed,
+        created_by_user_id=current_user.id if current_user else None,
+        created_from="CRM",
         raw_json=sc_response if isinstance(sc_response, dict) else {"error": sc_sync_error},
     )
     db.add(new_container)
@@ -805,6 +811,25 @@ def create_container(
     db.commit()
     db.refresh(new_container)
 
+    if current_user:
+        try:
+            log_activity(
+                db,
+                action="CREATE_CONTAINER",
+                user_id=current_user.id,
+                category="SHIPPING",
+                entity_type="CONTAINER",
+                entity_id=str(new_container.id),
+                details={
+                    "container_name": new_container.container_name,
+                    "sellercloud_container_id": sellercloud_container_id,
+                    "items_count": len(linked_items_summary),
+                    "created_from": "CRM"
+                }
+            )
+        except Exception:
+            pass
+
     response = {
         "success": True,
         "sellercloud_synced": sellercloud_container_id is not None,
@@ -817,6 +842,8 @@ def create_container(
             "id": str(new_container.id),
             "sellercloud_container_id": new_container.sellercloud_container_id,
             "container_name": new_container.container_name,
+            "created_by_user_id": str(new_container.created_by_user_id) if new_container.created_by_user_id else None,
+            "created_from": new_container.created_from,
             "estimated_arrival_date": (
                 new_container.estimated_arrival_date.isoformat()
                 if new_container.estimated_arrival_date

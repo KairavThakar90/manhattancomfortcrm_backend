@@ -430,6 +430,9 @@ class ContainerOut(BaseModel):
     trucking_company: Optional[str] = None
     logistics_company_id: Optional[uuid.UUID] = None
     logistics_company: Optional[LogisticsCompanyOut] = None
+    created_by_user_id: Optional[uuid.UUID] = None
+    created_from: Optional[str] = "SELLERCLOUD_SYNC"
+    created_by_user: Optional[UserMentionOut] = None
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
@@ -529,6 +532,9 @@ class ContainerDetailOut(BaseModel):
     trucking_company: Optional[str] = None
     logistics_company_id: Optional[uuid.UUID] = None
     logistics_company: Optional[LogisticsCompanyOut] = None
+    created_by_user_id: Optional[uuid.UUID] = None
+    created_from: Optional[str] = "SELLERCLOUD_SYNC"
+    created_by_user: Optional[UserMentionOut] = None
     date_emptied: Optional[datetime] = None
     unloaded_by: Optional[str] = None
     unload_cost: Optional[float] = None
@@ -856,6 +862,9 @@ class PurchaseOrderOut(BaseModel):
     customer_id: Optional[uuid.UUID] = None
     customer: Optional['CustomerOut'] = None
     status: Optional[str] = None
+    created_by_user_id: Optional[uuid.UUID] = None
+    created_from: Optional[str] = "SELLERCLOUD_SYNC"
+    created_by_user: Optional[UserMentionOut] = None
     items: List[PurchaseOrderItemOut] = []
     comments: List[POCommentOut] = []
     
@@ -1131,6 +1140,52 @@ class UserActivityLogCreate(BaseModel):
     entity_type: Optional[str] = None
     entity_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
+
+
+class ProductCreate(BaseModel):
+    sku: str
+    product_name: Optional[str] = None
+    vendor_id: Optional[Union[uuid.UUID, str]] = None
+    date: Optional[datetime] = None
+    price: Optional[float] = None
+    is_active: Optional[bool] = True
+
+
+class ProductUpdate(BaseModel):
+    sku: Optional[str] = None
+    product_name: Optional[str] = None
+    vendor_id: Optional[Union[uuid.UUID, str]] = None
+    date: Optional[datetime] = None
+    price: Optional[float] = None
+    is_active: Optional[bool] = None
+
+
+class ProductOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sku: str
+    product_name: Optional[str] = None
+    vendor_id: Optional[uuid.UUID] = None
+    vendor: Optional[VendorSummary] = None
+    date: Optional[datetime] = None
+    price: Optional[float] = None
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @field_validator('price', mode='before')
+    @classmethod
+    def cast_price(cls, v: Any):
+        if v is not None:
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return None
+        return None
+
+
+class ProductBulkCreate(BaseModel):
+    products: List[ProductCreate]
 
 class UserActivityLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

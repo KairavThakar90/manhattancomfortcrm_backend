@@ -217,6 +217,10 @@ class PurchaseOrder(Base):
     # Customer Info (ForeignKey to Customer table)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
     
+    # Creator / Source Tracking
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_from = Column(String(50), default="SELLERCLOUD_SYNC", nullable=True)  # "CRM" or "SELLERCLOUD_SYNC"
+
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -227,6 +231,7 @@ class PurchaseOrder(Base):
     customer = relationship("Customer", backref="purchase_orders")
     channel = relationship("Channel", back_populates="purchase_orders")
     delay_reason_user = relationship("User", foreign_keys=[delay_reason_updated_by_id])
+    created_by_user = relationship("User", foreign_keys=[created_by_user_id])
     items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
     comments = relationship("PurchaseOrderComment", back_populates="purchase_order", cascade="all, delete-orphan")
 
@@ -358,6 +363,10 @@ class ShippingContainer(Base):
     trucker_email = Column(String(255))
     last_notified_trucker_email = Column(String(255))
     trucking_company = Column(String(255))
+    
+    # Creator / Source Tracking
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_from = Column(String(50), default="SELLERCLOUD_SYNC", nullable=True)  # "CRM" or "SELLERCLOUD_SYNC"
 
     raw_json = deferred(Column(JSONB))
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -366,6 +375,7 @@ class ShippingContainer(Base):
     item_links = relationship("PurchaseOrderItemContainer", back_populates="container", cascade="all, delete-orphan")
     warehouse = relationship("Warehouse", back_populates="containers")
     logistics_company = relationship("LogisticsCompany", back_populates="containers")
+    created_by_user = relationship("User", foreign_keys=[created_by_user_id])
     attachments = relationship("ShippingContainerAttachment", back_populates="container", cascade="all, delete-orphan")
     tracking = relationship("ShippingContainerTracking", back_populates="container", uselist=False, cascade="all, delete-orphan")
     comments = relationship("ShippingContainerComment", back_populates="container", cascade="all, delete-orphan")
@@ -488,6 +498,20 @@ class UserActivityLog(Base):
     entity_type = Column(String(50), nullable=True)  # e.g., PURCHASE_ORDER, CONTAINER
     entity_id = Column(String(255), nullable=True)  # ID of the affected entity
     details = Column(JSONB, nullable=True)  # Extra context
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-
     user = relationship("User", backref="activity_logs")
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sku = Column(String(100), nullable=False, index=True)
+    product_name = Column(String(255), nullable=True)
+    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="CASCADE"), nullable=True, index=True)
+    date = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    price = Column(Numeric(12, 2), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    vendor = relationship("Vendor", backref="products")

@@ -151,7 +151,9 @@ def create_purchase_order(
         container_lead_time_days=lead_time,
         total_amount=total_amount,
         currency="USD",
-        notes=po_data.notes
+        notes=po_data.notes,
+        created_by_user_id=current_user.id,
+        created_from="CRM"
     )
     db.add(new_po)
     db.flush()
@@ -184,6 +186,7 @@ def create_purchase_order(
             joinedload(models.PurchaseOrder.channel),
             joinedload(models.PurchaseOrder.customer),
             joinedload(models.PurchaseOrder.delay_reason_user),
+            joinedload(models.PurchaseOrder.created_by_user),
             joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
             joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user),
             joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.attachments)
