@@ -12,15 +12,71 @@ from google.auth.transport import requests as google_requests
 from app.database import get_db
 from app import auth as auth_utils
 from app import models
+import uuid
 from app.services.email_service import send_welcome_email, send_2fa_email, send_admin_new_user_notification
 from app.services.activity_service import log_activity
 from app.config import settings
 from app.schemas import (
     Token, RefreshTokenRequest, LogoutResponse, UserOut, UserCreate, UserUpdate, UserMentionOut,
-    UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest, ColumnPreferencesOut
+    UpdatePasswordRequest, Login2FAResponse, Verify2FARequest, GoogleLoginRequest, ColumnPreferencesOut,
+    VendorSummary
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+def enrich_user_out(user: models.User, db: Session) -> UserOut:
+    """Enriches UserOut with full details for all assigned vendors."""
+    user_out = UserOut.model_validate(user)
+    effective_ids = user.effective_vendor_ids
+    if effective_ids:
+        vendors = db.query(models.Vendor).filter(models.Vendor.id.in_(effective_ids)).all()
+        user_out.vendors = [VendorSummary.model_validate(v) for v in vendors]
+        user_out.vendor_ids = [v.id for v in vendors]
+    else:
+        user_out.vendors = []
+        user_out.vendor_ids = []
+    return user_out
+
+
+def enrich_users_out(users: list[models.User], db: Session) -> list[UserOut]:
+    """Batch enriches a list of users with vendor details without N+1 queries."""
+    all_vendor_ids = set()
+    for u in users:
+        all_vendor_ids.update(u.effective_vendor_ids)
+    
+    vendor_map = {}
+    if all_vendor_ids:
+        vendors = db.query(models.Vendor).filter(models.Vendor.id.in_(list(all_vendor_ids))).all()
+        vendor_map = {v.id: VendorSummary.model_validate(v) for v in vendors}
+        
+    results = []
+    for u in users:
+        u_out = UserOut.model_validate(u)
+        u_vids = u.effective_vendor_ids
+        u_out.vendors = [vendor_map[vid] for vid in u_vids if vid in vendor_map]
+        u_out.vendor_ids = [vid for vid in u_vids if vid in vendor_map]
+        results.append(u_out)
+    return results
+
+
+def resolve_vendor_helper(db: Session, raw_id: Any) -> Optional[models.Vendor]:
+    """Helper to resolve a Vendor by UUID, SellerCloud Integer ID, or Name."""
+    if not raw_id:
+        return None
+    raw_str = str(raw_id).strip()
+    try:
+        v_uuid = uuid.UUID(raw_str)
+        vendor = db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first()
+        if vendor:
+            return vendor
+    except ValueError:
+        pass
+    if raw_str.isdigit():
+        vendor = db.query(models.Vendor).filter(models.Vendor.sellercloud_vendor_id == int(raw_str)).first()
+        if vendor:
+            return vendor
+    return db.query(models.Vendor).filter(models.Vendor.name.ilike(raw_str)).first()
 
 
 @router.post("/login", response_model=Union[Login2FAResponse, Token])
@@ -247,9 +303,9 @@ def logout(
 
 
 @router.get("/me", response_model=UserOut)
-def read_current_user(current_user=Depends(auth_utils.get_current_user)):
+def read_current_user(current_user=Depends(auth_utils.get_current_user), db: Session = Depends(get_db)):
     """Get current authenticated user information."""
-    return current_user
+    return enrich_user_out(current_user, db)
 
 
 @router.get("/me/column-preferences", response_model=ColumnPreferencesOut)
@@ -293,7 +349,7 @@ def get_all_users(
         
     query = query.order_by(models.User.created_at.desc())
     users = query.all()
-    return [UserOut.model_validate(u) for u in users]
+    return enrich_users_out(users, db)
 
 
 @router.get("/users/tag", response_model=list[UserMentionOut])
@@ -320,7 +376,7 @@ def get_mentionable_users(
             query = query.filter(
                 (models.User.role == "admin") | 
                 (models.User.role == "office") | 
-                ((models.User.role == "vendor") & (models.User.vendor_id == current_user.vendor_id))
+                ((models.User.role == "vendor") & (models.User.vendor_id.in_(current_user.effective_vendor_ids)))
             )
         
     users = query.all()
@@ -356,14 +412,25 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
         )
     
     # Check vendor role requirements
+    resolved_vendor_ids = []
     if user_data.role == "vendor":
-        if user_data.vendor_id:
-            vendor_exists = db.query(models.Vendor).filter(models.Vendor.id == user_data.vendor_id).first()
-            if not vendor_exists:
+        if user_data.vendor_ids:
+            for raw_vid in user_data.vendor_ids:
+                v_obj = resolve_vendor_helper(db, raw_vid)
+                if not v_obj:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Vendor '{raw_vid}' not found"
+                    )
+                resolved_vendor_ids.append(str(v_obj.id))
+        elif user_data.vendor_id:
+            v_obj = resolve_vendor_helper(db, user_data.vendor_id)
+            if not v_obj:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Vendor not found"
+                    detail=f"Vendor '{user_data.vendor_id}' not found"
                 )
+            resolved_vendor_ids.append(str(v_obj.id))
         else:
             # If vendor_id is not provided, create a new vendor using the provided fields
             v_name = user_data.vendor_name or f"{user_data.first_name} {user_data.last_name}"
@@ -377,7 +444,9 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
             db.add(new_vendor)
             db.commit()
             db.refresh(new_vendor)
-            user_data.vendor_id = new_vendor.id
+            resolved_vendor_ids.append(str(new_vendor.id))
+
+    primary_vendor_id = uuid.UUID(resolved_vendor_ids[0]) if resolved_vendor_ids else None
             
     # Check warehouse role requirements
     if user_data.role == "warehouse":
@@ -406,7 +475,8 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
         last_name=user_data.last_name,
         full_name=full_name,
         role=user_data.role,
-        vendor_id=user_data.vendor_id if user_data.role == "vendor" else None,
+        vendor_id=primary_vendor_id if user_data.role == "vendor" else None,
+        vendor_ids=resolved_vendor_ids if user_data.role == "vendor" else [],
         warehouse_id=user_data.warehouse_id if user_data.role == "warehouse" else None,
         country=user_data.country if user_data.role == "vendor" else None,
         phone=user_data.phone if user_data.role == "vendor" else None,
@@ -444,7 +514,7 @@ def create_user(user_data: UserCreate, background_tasks: BackgroundTasks, db: Se
             new_user_role=user_data.role
         )
     
-    return UserOut.model_validate(new_user)
+    return enrich_user_out(new_user, db)
 
 
 @router.get("/users/{user_id}", response_model=UserOut)
@@ -467,7 +537,7 @@ def get_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    return UserOut.model_validate(user)
+    return enrich_user_out(user, db)
 
 
 @router.post("/users/{user_id}", response_model=UserOut)
@@ -500,7 +570,7 @@ def update_user(
     
     if current_user.role != "admin":
         # Non-admins cannot update sensitive fields
-        restricted_keys = ["role", "vendor_id", "warehouse_id", "is_active", "container_lead_time_days", "payment_terms"]
+        restricted_keys = ["role", "vendor_id", "vendor_ids", "warehouse_id", "is_active", "container_lead_time_days", "payment_terms"]
         for key in restricted_keys:
             update_data.pop(key, None)
     
@@ -508,13 +578,49 @@ def update_user(
     if "role" in update_data:
         new_role = update_data["role"]
         if new_role == "vendor":
+            v_ids = update_data.get("vendor_ids", user.vendor_ids)
             v_id = update_data.get("vendor_id", user.vendor_id)
-            if not v_id:
-                raise HTTPException(status_code=400, detail="vendor_id is required for vendor role")
+            if not v_ids and not v_id:
+                raise HTTPException(status_code=400, detail="vendor_id or vendor_ids is required for vendor role")
         elif new_role == "warehouse":
             w_id = update_data.get("warehouse_id", user.warehouse_id)
             if not w_id:
                 raise HTTPException(status_code=400, detail="warehouse_id is required for warehouse role")
+
+    # Handle multi-vendor or single vendor updates
+    if "vendor_ids" in update_data:
+        raw_vids = update_data.pop("vendor_ids")
+        if raw_vids is not None:
+            if isinstance(raw_vids, list):
+                list_vids = raw_vids
+            else:
+                list_vids = [raw_vids]
+            str_vids = []
+            for raw_vid in list_vids:
+                if not raw_vid:
+                    continue
+                v_obj = resolve_vendor_helper(db, raw_vid)
+                if not v_obj:
+                    raise HTTPException(status_code=400, detail=f"Vendor '{raw_vid}' not found")
+                str_vids.append(str(v_obj.id))
+            user.vendor_ids = str_vids
+            user.vendor_id = uuid.UUID(str_vids[0]) if str_vids else None
+        else:
+            user.vendor_ids = []
+            user.vendor_id = None
+        # Remove vendor_id from update_data if present to avoid conflict
+        update_data.pop("vendor_id", None)
+    elif "vendor_id" in update_data:
+        raw_vid = update_data.get("vendor_id")
+        if raw_vid is not None:
+            v_obj = resolve_vendor_helper(db, raw_vid)
+            if not v_obj:
+                raise HTTPException(status_code=400, detail=f"Vendor '{raw_vid}' not found")
+            user.vendor_id = v_obj.id
+            user.vendor_ids = [str(v_obj.id)]
+        else:
+            user.vendor_id = None
+            user.vendor_ids = []
 
     if "password" in update_data:
         password = update_data.pop("password")
@@ -533,7 +639,7 @@ def update_user(
     db.commit()
     db.refresh(user)
     
-    return UserOut.model_validate(user)
+    return enrich_user_out(user, db)
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

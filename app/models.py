@@ -23,6 +23,7 @@ class User(Base):
     full_name = Column(String(255))
     role = Column(String(50), default="user", nullable=False)
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True)
+    vendor_ids = Column(JSON, default=list, nullable=True)
     warehouse_id = Column(UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"), nullable=True)
     
     # Registration info (mirrored from Vendor for clarity on per-user level)
@@ -62,6 +63,22 @@ class User(Base):
     po_comments = relationship("PurchaseOrderComment", back_populates="user")
     po_item_comments = relationship("PurchaseOrderItemComment", back_populates="user")
     container_comments = relationship("ShippingContainerComment", back_populates="user")
+
+    @property
+    def effective_vendor_ids(self) -> list:
+        """Returns a deduplicated list of UUID objects for all assigned vendors."""
+        v_ids = set()
+        if self.vendor_id:
+            v_ids.add(self.vendor_id)
+        if self.vendor_ids and isinstance(self.vendor_ids, list):
+            for vid in self.vendor_ids:
+                if not vid:
+                    continue
+                try:
+                    v_ids.add(uuid.UUID(str(vid)))
+                except (ValueError, TypeError):
+                    pass
+        return list(v_ids)
 
 
 class Company(Base):
