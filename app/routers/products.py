@@ -74,10 +74,20 @@ def list_products(
         products = query.offset((page - 1) * page_size).limit(page_size).all()
         results = [ProductOut.model_validate(p).model_dump(mode='python') for p in products]
         return PaginatedResponse(total=total, page=page, page_size=page_size, results=results)
+    elif page is not None and page_size is None:
+        p_size = 25
+        products = query.offset((page - 1) * p_size).limit(p_size).all()
+        results = [ProductOut.model_validate(p).model_dump(mode='python') for p in products]
+        return PaginatedResponse(total=total, page=page, page_size=p_size, results=results)
+    elif page is None and page_size is not None:
+        products = query.limit(page_size).all()
+        results = [ProductOut.model_validate(p).model_dump(mode='python') for p in products]
+        return PaginatedResponse(total=total, page=1, page_size=page_size, results=results)
     else:
+        # Neither page nor page_size provided: return ALL records
         products = query.all()
         results = [ProductOut.model_validate(p).model_dump(mode='python') for p in products]
-        return PaginatedResponse(total=total, page=1, page_size=total or 1, results=results)
+        return PaginatedResponse(total=total, page=1, page_size=total if total > 0 else 1, results=results)
 
 
 @router.get("/{product_id}", response_model=ProductOut)

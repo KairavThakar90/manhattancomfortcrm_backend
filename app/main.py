@@ -12,8 +12,29 @@ from app.routers import (
 )
 from app.middleware.activity_logger import ActivityLoggingMiddleware
 
+from sqlalchemy import text
+
 # Automatically create tables if not existing
 Base.metadata.create_all(bind=engine)
+
+# Automatically add any new columns to existing tables on startup
+def auto_migrate_schema():
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                ALTER TABLE purchase_orders 
+                ADD COLUMN IF NOT EXISTS created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                ADD COLUMN IF NOT EXISTS created_from VARCHAR(50) DEFAULT 'SELLERCLOUD_SYNC';
+                
+                ALTER TABLE shipping_containers 
+                ADD COLUMN IF NOT EXISTS created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                ADD COLUMN IF NOT EXISTS created_from VARCHAR(50) DEFAULT 'SELLERCLOUD_SYNC';
+            """))
+            conn.commit()
+    except Exception as e:
+        print(f"[auto_migrate_schema] Notice: {e}")
+
+auto_migrate_schema()
 
 app = FastAPI(title="Manhattan Comfort CRM API", version="1.0.0")
 
