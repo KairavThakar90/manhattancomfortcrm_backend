@@ -103,7 +103,7 @@ def get_all_filter_categories(
     
     # Apply vendor filter if provided
     if current_user.role == "vendor":
-        base_query = base_query.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+        base_query = base_query.filter(models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids))
     elif vendor_id:
         base_query = base_query.filter(models.PurchaseOrder.vendor_id == models.Vendor.id).filter(models.Vendor.sellercloud_vendor_id == vendor_id)
     
@@ -501,7 +501,7 @@ def list_purchase_orders(
     
     
     if current_user.role == "vendor":
-        q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+        q = q.filter(models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids))
     elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
         
@@ -778,7 +778,7 @@ async def add_po_comment(
         raise HTTPException(status_code=404, detail="Purchase order not found")
         
     if current_user.role == "vendor":
-        if str(po.vendor_id) != str(current_user.vendor_id):
+        if po.vendor_id not in current_user.effective_vendor_ids:
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
             
     if not comment:
@@ -1071,6 +1071,10 @@ def get_po_item_comments(
     item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if current_user.role == "vendor":
+        if not item.purchase_order or item.purchase_order.vendor_id not in current_user.effective_vendor_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to view comments for this item")
  
     comments = (
         db.query(models.PurchaseOrderItemComment)
@@ -1112,6 +1116,10 @@ async def add_po_item_comment(
     item = db.query(models.PurchaseOrderItem).filter(filter_clause).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if current_user.role == "vendor":
+        if not item.purchase_order or item.purchase_order.vendor_id not in current_user.effective_vendor_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to comment on this item")
         
     if not comment:
         try:
@@ -1526,7 +1534,7 @@ def get_filtered_pos(
         
         # Apply vendor filter if provided
         if current_user.role == "vendor":
-            base_q = base_q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+            base_q = base_q.filter(models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids))
         elif vendor_id:
             base_q = base_q.filter(models.PurchaseOrder.vendor_id == vendor_id)
             
@@ -1641,7 +1649,7 @@ def get_filtered_pos(
     
     # Apply vendor filter if provided
     if current_user.role == "vendor":
-        q = q.filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
+        q = q.filter(models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids))
     elif vendor_id:
         q = q.filter(models.PurchaseOrder.vendor_id == vendor_id)
         
@@ -2226,7 +2234,7 @@ def update_po_status(
         raise HTTPException(status_code=404, detail=f"Purchase order '{po_id}' not found")
         
     if current_user.role == "vendor":
-        if str(po.vendor_id) != str(current_user.vendor_id):
+        if po.vendor_id not in current_user.effective_vendor_ids:
             raise HTTPException(status_code=403, detail="Not authorized to update this PO")
             
     changed = False

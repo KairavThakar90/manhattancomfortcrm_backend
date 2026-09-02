@@ -23,6 +23,7 @@ class UserCreate(BaseModel):
     password: str
     role: str = "user"  # Default role
     vendor_id: Optional[uuid.UUID] = None
+    vendor_ids: Optional[List[uuid.UUID]] = None
     warehouse_id: Optional[uuid.UUID] = None
     # New fields for vendor registration:
     vendor_name: Optional[str] = None
@@ -41,7 +42,9 @@ class UserOut(BaseModel):
     full_name: Optional[str] = None
     role: str
     vendor_id: Optional[uuid.UUID] = None
+    vendor_ids: Optional[List[uuid.UUID]] = []
     vendor: Optional['VendorSummary'] = None
+    vendors: Optional[List['VendorSummary']] = []
     warehouse_id: Optional[uuid.UUID] = None
     warehouse: Optional['WarehouseOut'] = None
     country: Optional[str] = None
@@ -77,6 +80,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     role: Optional[str] = None
     vendor_id: Optional[uuid.UUID] = None
+    vendor_ids: Optional[List[uuid.UUID]] = None
     warehouse_id: Optional[uuid.UUID] = None
     country: Optional[str] = None
     phone: Optional[str] = None

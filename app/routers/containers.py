@@ -275,12 +275,15 @@ def list_containers(
         query = query.filter(models.ShippingContainer.warehouse_id == current_user.warehouse_id)
 
     # Restrict Vendors to their assigned vendor containers
-    if current_user.role == "vendor" and current_user.vendor_id:
-        vendor_container_ids = db.query(models.PurchaseOrderItemContainer.shipping_container_id) \
-            .join(models.PurchaseOrderItem, models.PurchaseOrderItemContainer.purchase_order_item_id == models.PurchaseOrderItem.id) \
-            .join(models.PurchaseOrder, models.PurchaseOrderItem.purchase_order_id == models.PurchaseOrder.id) \
-            .filter(models.PurchaseOrder.vendor_id == current_user.vendor_id)
-        query = query.filter(models.ShippingContainer.id.in_(vendor_container_ids))
+    if current_user.role == "vendor":
+        if current_user.effective_vendor_ids:
+            vendor_container_ids = db.query(models.PurchaseOrderItemContainer.shipping_container_id) \
+                .join(models.PurchaseOrderItem, models.PurchaseOrderItemContainer.purchase_order_item_id == models.PurchaseOrderItem.id) \
+                .join(models.PurchaseOrder, models.PurchaseOrderItem.purchase_order_id == models.PurchaseOrder.id) \
+                .filter(models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids))
+            query = query.filter(models.ShippingContainer.id.in_(vendor_container_ids))
+        else:
+            query = query.filter(False)
 
     # Filter by PO (UUID or SC integer ID)
     if po_id or sellercloud_po_id or vendor_id:
@@ -1523,7 +1526,7 @@ def get_container_details(
             .join(models.PurchaseOrder)
             .filter(
                 models.PurchaseOrderItemContainer.shipping_container_id == container.id,
-                models.PurchaseOrder.vendor_id == current_user.vendor_id
+                models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids)
             ).exists()
         ).scalar()
         if not is_authorized:
@@ -2675,7 +2678,7 @@ async def add_container_comment(
             .join(models.PurchaseOrder)
             .filter(
                 models.PurchaseOrderItemContainer.shipping_container_id == container.id,
-                models.PurchaseOrder.vendor_id == current_user.vendor_id
+                models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids)
             ).exists()
         ).scalar()
         if not is_authorized:
@@ -2975,7 +2978,7 @@ def get_container_comments(
             .join(models.PurchaseOrder)
             .filter(
                 models.PurchaseOrderItemContainer.shipping_container_id == container.id,
-                models.PurchaseOrder.vendor_id == current_user.vendor_id
+                models.PurchaseOrder.vendor_id.in_(current_user.effective_vendor_ids)
             ).exists()
         ).scalar()
         if not is_authorized:
