@@ -928,7 +928,7 @@ def list_purchase_orders(
                 "sellercloud_customer_id": None,
                 "company_id": po_dict.get("company_id"),
                 "first_name": "Manhattan",
-                "last_name": "comfort",
+                "last_name": "Manhattan Comfort",
                 "email": "",
                 "phone": "",
                 "billing_city": "",

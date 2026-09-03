@@ -64,7 +64,7 @@ def list_customers(
                 "id": "00000000-0000-0000-0000-000000000000",
                 "sellercloud_customer_id": 0,
                 "first_name": "Manhattan",
-                "last_name": "Comfort",
+                "last_name": "Manhattan Comfort",
                 "email": "",
                 "phone": "",
                 "company_id": None,
