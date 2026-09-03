@@ -4,17 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
-<<<<<<< HEAD
-from app.database import engine, Base
-from app import models
-from app.routers import (
-    auth, companies, customers, vendors, purchase_orders, containers,
-    warehouses, activities, cron, channels, logistics, products
-)
-=======
 from app import schemas
 from app.routers import auth, companies, customers, vendors, purchase_orders, containers, warehouses, activities, cron, channels, logistics
->>>>>>> 8aaf131d234b9cc5c1d4426fe710649877ab0cc7
 from app.middleware.activity_logger import ActivityLoggingMiddleware
 
 from sqlalchemy import text

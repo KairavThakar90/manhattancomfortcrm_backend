@@ -813,26 +813,6 @@ def create_container(
     db.commit()
     db.refresh(new_container)
 
-<<<<<<< HEAD
-    if current_user:
-        try:
-            log_activity(
-                db,
-                action="CREATE_CONTAINER",
-                user_id=current_user.id,
-                category="SHIPPING",
-                entity_type="CONTAINER",
-                entity_id=str(new_container.id),
-                details={
-                    "container_name": new_container.container_name,
-                    "sellercloud_container_id": sellercloud_container_id,
-                    "items_count": len(linked_items_summary),
-                    "created_from": "CRM"
-                }
-            )
-        except Exception:
-            pass
-=======
     sc_items_synced = sellercloud_container_id is not None and not sc_items_error
 
     if not sellercloud_container_id:
@@ -841,7 +821,6 @@ def create_container(
         message = "Container created in SellerCloud, but items failed to sync (see sc_items_error) — vendor/items will be missing in SellerCloud until this is retried"
     else:
         message = "Container created and synced to SellerCloud"
->>>>>>> 8aaf131d234b9cc5c1d4426fe710649877ab0cc7
 
     response = {
         "success": True,
