@@ -1077,6 +1077,14 @@ class PurchaseOrderOut(BaseModel):
             if status_lower not in manual_statuses:
                 instance.status = "NOT_STARTED"
         
+        # Ensure status_label is in Capital (uppercase)
+        if instance.status:
+            instance.status_label = instance.status.replace("_", " ").upper()
+        elif instance.status_label:
+            instance.status_label = instance.status_label.upper()
+        else:
+            instance.status_label = "NOT STARTED"
+
         return instance
 
 

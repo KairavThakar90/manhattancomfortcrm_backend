@@ -173,7 +173,7 @@ def create_purchase_order(
         warehouse_id=warehouse.id if warehouse else None,
         purchase_order_status_code=100,  # Open / In Process
         receiving_status_code=0,
-        status_label="Not Started",
+        status_label="NOT STARTED",
         status="NOT_STARTED",
         created_on=datetime.utcnow(),
         date_ordered=datetime.utcnow(),
