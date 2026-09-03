@@ -110,6 +110,11 @@ app.include_router(products.router, prefix="/api/v1")
 
 
 
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Manhattan Comfort CRM API is running"}
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
