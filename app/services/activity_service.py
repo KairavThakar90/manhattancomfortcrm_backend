@@ -2,6 +2,8 @@ from sqlalchemy.orm import Session
 from app import models
 import uuid
 
+from datetime import datetime, timezone
+
 def log_activity(
     db: Session, 
     action: str, 
@@ -33,7 +35,8 @@ def log_activity(
             category=category,
             entity_type=entity_type,
             entity_id=str(entity_id) if entity_id else None,
-            details=details
+            details=details,
+            created_at=datetime.now(timezone.utc)
         )
         db.add(log_entry)
         db.commit()

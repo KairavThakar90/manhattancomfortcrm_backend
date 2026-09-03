@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, ForeignKey, Numeric, Integer, Text
+    Column, String, Boolean, DateTime, ForeignKey, Numeric, Integer, Text, func
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, deferred
@@ -498,7 +498,7 @@ class UserActivityLog(Base):
     entity_type = Column(String(50), nullable=True)  # e.g., PURCHASE_ORDER, CONTAINER
     entity_id = Column(String(255), nullable=True)  # ID of the affected entity
     details = Column(JSONB, nullable=True)  # Extra context
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, server_default=func.now(), nullable=False)
     user = relationship("User", backref="activity_logs")
 
 
