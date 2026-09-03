@@ -92,17 +92,10 @@ def create_purchase_order(
     sc_wh_id = warehouse.sellercloud_warehouse_id if warehouse else 138
     sc_products = []
     for it in po_data.items:
-        item_wh_id = sc_wh_id
-        if it.warehouse_id:
-            wh_item = resolve_warehouse_helper(db, warehouse_id=it.warehouse_id)
-            if wh_item and wh_item.sellercloud_warehouse_id:
-                item_wh_id = wh_item.sellercloud_warehouse_id
-
         p_entry = {
             "ProductID": it.sku.strip(),
             "QtyUnitsOrdered": it.qty_ordered,
-            "UnitPrice": float(it.unit_price or 0.0),
-            "WarehouseID": item_wh_id
+            "UnitPrice": float(it.unit_price or 0.0)
         }
         if it.item_notes:
             p_entry["ItemNotes"] = it.item_notes
