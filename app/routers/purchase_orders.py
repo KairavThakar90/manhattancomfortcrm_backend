@@ -1116,6 +1116,7 @@ def delete_purchase_order(
 
 
 @router.put("/{po_id}", response_model=PurchaseOrderOut)
+@router.patch("/{po_id}", response_model=PurchaseOrderOut)
 def update_purchase_order(
     po_id: str,
     po_data: POUpdate,

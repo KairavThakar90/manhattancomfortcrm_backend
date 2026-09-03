@@ -247,6 +247,9 @@ class SellerCloudClient:
                 }
             ]
         }
+        resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}/Items", json=payload)
+        return resp.status_code in (200, 204)
+
     def delete_purchase_order(self, po_id: int) -> bool:
         """
         Delete a Purchase Order in SellerCloud.
