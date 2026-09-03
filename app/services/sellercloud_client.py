@@ -247,6 +247,28 @@ class SellerCloudClient:
                 }
             ]
         }
+    def delete_purchase_order(self, po_id: int) -> bool:
+        """
+        Delete a Purchase Order in SellerCloud.
+        DELETE /api/PurchaseOrders/{po_id}
+        """
+        resp = self._request("DELETE", f"/api/PurchaseOrders/{po_id}")
+        return resp.status_code in (200, 204)
+
+    def update_purchase_order_full(self, po_id: int, payload: dict) -> bool:
+        """
+        Update header details of a Purchase Order in SellerCloud.
+        PUT /api/PurchaseOrders/{po_id}
+        """
+        resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}", json=payload)
+        return resp.status_code == 200
+
+    def update_purchase_order_items(self, po_id: int, items_payload: list) -> bool:
+        """
+        Update items in a Purchase Order in SellerCloud.
+        PUT /api/PurchaseOrders/{po_id}/Items
+        """
+        payload = {"Items": items_payload}
         resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}/Items", json=payload)
         return resp.status_code == 200
 

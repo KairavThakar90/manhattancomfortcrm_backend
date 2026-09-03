@@ -601,6 +601,13 @@ def _map_po(detail: dict) -> dict:
     invoices = vendor_invoice.get("Invoices") or []
     invoice_date = vendor_invoice.get("InvoiceDate") or (invoices[0].get("InvoiceDate") if invoices else None)
 
+    items_list = detail.get("Items") or []
+    sc_warehouse_id = purchase.get("DefaultWarehouseID") or purchase.get("DefaultWarehouseId")
+    if not sc_warehouse_id and items_list:
+        sc_warehouse_id = items_list[0].get("DefaultWarehouseID") or items_list[0].get("WarehouseID")
+    if not sc_warehouse_id:
+        sc_warehouse_id = 138
+
     return dict(
         sellercloud_po_id=purchase.get("POId"),
         purchase_title=purchase.get("Description"),
@@ -613,7 +620,7 @@ def _map_po(detail: dict) -> dict:
         total_amount=total_info.get("GrandTotal") or 0,
         currency="USD",
         notes=vendor_invoice.get("Memo") or purchase.get("Instructions"),
-        sellercloud_warehouse_id=purchase.get("DefaultWarehouseID"),
+        sellercloud_warehouse_id=sc_warehouse_id,
         raw_json=detail,
     )
 

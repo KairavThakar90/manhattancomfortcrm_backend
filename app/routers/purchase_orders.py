@@ -16,7 +16,8 @@ from app.schemas import (
     PurchaseOrderOut, PaginatedResponse, SyncResponse, POExportRequest,
     POCommentCreate, POCommentOut, POCommentUpdate, POItemCommentCreate,
     POItemCommentOut, POStatusUpdate, POItemQuantityUpdate,
-    POItemForContainerOut, POItemBasicOut, POCreate, POCreateItem
+    POItemForContainerOut, POItemBasicOut, POCreate, POCreateItem,
+    POUpdate, POUpdateItem
 )
 from app.services.email_service import send_tag_notification
 from app.services.sync_service import sync_purchase_orders, sync_containers, backfill_po_customers, sync_single_po_full, sync_all_db_purchase_orders
@@ -81,11 +82,17 @@ def create_purchase_order(
     from app.routers.containers import resolve_warehouse_helper
     if po_data.warehouse_id:
         warehouse = resolve_warehouse_helper(db, warehouse_id=po_data.warehouse_id)
+    if not warehouse:
+        # Default to South Brunswick (sellercloud_warehouse_id 138)
+        warehouse = db.query(models.Warehouse).filter(models.Warehouse.sellercloud_warehouse_id == 138).first()
+        if not warehouse:
+            warehouse = db.query(models.Warehouse).filter(models.Warehouse.name.ilike("%south brunswick%")).first()
 
     # 4. Construct SellerCloud Payload
+    sc_wh_id = warehouse.sellercloud_warehouse_id if warehouse else 138
     sc_products = []
     for it in po_data.items:
-        item_wh_id = warehouse.sellercloud_warehouse_id if warehouse else None
+        item_wh_id = sc_wh_id
         if it.warehouse_id:
             wh_item = resolve_warehouse_helper(db, warehouse_id=it.warehouse_id)
             if wh_item and wh_item.sellercloud_warehouse_id:
@@ -94,10 +101,9 @@ def create_purchase_order(
         p_entry = {
             "ProductID": it.sku.strip(),
             "QtyUnitsOrdered": it.qty_ordered,
-            "UnitPrice": float(it.unit_price or 0.0)
+            "UnitPrice": float(it.unit_price or 0.0),
+            "WarehouseID": item_wh_id
         }
-        if item_wh_id:
-            p_entry["WarehouseID"] = item_wh_id
         if it.item_notes:
             p_entry["ItemNotes"] = it.item_notes
         if it.qty_cases_ordered:
@@ -113,10 +119,9 @@ def create_purchase_order(
         "VendorID": vendor.sellercloud_vendor_id,
         "POType": 0,  # 0 = PurchaseOrder, 1 = CreditMemo, 2 = VendorOffer
         "CaseQtyMode": any(bool(it.qty_cases_ordered) for it in po_data.items),
+        "DefaultWarehouseID": sc_wh_id,
         "Products": sc_products
     }
-    if warehouse and warehouse.sellercloud_warehouse_id:
-        sc_payload["DefaultWarehouseID"] = warehouse.sellercloud_warehouse_id
     if po_data.purchase_title:
         sc_payload["Description"] = po_data.purchase_title
     if po_data.notes:
@@ -1003,6 +1008,330 @@ def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
                 comment.user_name = comment.user.full_name or comment.user.email
             
     return PurchaseOrderOut.model_validate(po)
+
+
+@router.delete("/{po_id}")
+def delete_purchase_order(
+    po_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Delete a Purchase Order from SellerCloud and locally in CRM.
+    Checks:
+    1. PO exists.
+    2. Vendor permission (if user is vendor, can only delete own POs).
+    3. Cannot delete if items are in shipping container(s).
+    4. Cannot delete if goods have already been received.
+    5. Deletes in SellerCloud first, then removes from local database.
+    """
+    import uuid
+    from app.services.sellercloud_client import sellercloud_client
+    from app.services.activity_service import log_activity
+
+    try:
+        po_uuid = uuid.UUID(po_id)
+        po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_uuid).first()
+    except ValueError:
+        if po_id.isdigit():
+            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == int(po_id)).first()
+        else:
+            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+
+    # Vendor permission check
+    if current_user.role == "vendor":
+        if po.vendor_id not in current_user.effective_vendor_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this Purchase Order")
+
+    po_identifier = f"PO #{po.sellercloud_po_id}" if po.sellercloud_po_id else (po.purchase_title or str(po.id))
+
+    # Safety Guardrail 1: Check if any items are assigned to shipping containers
+    assigned_containers = set()
+    for item in po.items:
+        if (item.qty_in_container or 0) > 0:
+            for link in item.container_links:
+                if link.container:
+                    assigned_containers.add(link.container.container_name or str(link.container.sellercloud_container_id or link.container.id))
+        elif item.container_links:
+            for link in item.container_links:
+                if link.container:
+                    assigned_containers.add(link.container.container_name or str(link.container.sellercloud_container_id or link.container.id))
+
+    if assigned_containers:
+        cont_list_str = ", ".join(sorted(list(assigned_containers)))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete {po_identifier}: Items are currently assigned to shipping container(s) [{cont_list_str}]. Please remove the items from the container(s) before deleting the PO."
+        )
+
+    # Safety Guardrail 2: Check if any goods have already been received
+    total_received = sum((item.qty_received or 0) for item in po.items)
+    if total_received > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete {po_identifier}: Goods from this PO have already been received ({total_received} units received)."
+        )
+
+    # Delete in SellerCloud if it has a SellerCloud PO ID
+    if po.sellercloud_po_id:
+        try:
+            sellercloud_client.delete_purchase_order(po.sellercloud_po_id)
+        except Exception as e:
+            sc_error_detail = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    err_text = e.response.text.strip().strip('"')
+                    if err_text:
+                        sc_error_detail = err_text
+                except Exception:
+                    pass
+            # If SellerCloud returned 404, it means it's already deleted in SellerCloud, so we can proceed with local DB cleanup
+            if hasattr(e, "response") and e.response is not None and e.response.status_code == 404:
+                pass
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"SellerCloud Error deleting {po_identifier}: {sc_error_detail}"
+                )
+
+    # Delete from local database
+    sc_po_id_val = po.sellercloud_po_id
+    po_title_val = po.purchase_title
+    po_id_str = str(po.id)
+
+    db.delete(po)
+    db.commit()
+
+    # Log activity
+    log_activity(
+        db,
+        action="DELETE_PO",
+        user_id=current_user.id,
+        entity_type="PURCHASE_ORDER",
+        entity_id=str(sc_po_id_val or po_id_str),
+        details={"po_title": po_title_val, "sellercloud_po_id": sc_po_id_val}
+    )
+
+    return {
+        "success": True,
+        "message": f"{po_identifier} deleted successfully",
+        "deleted_po_id": sc_po_id_val or po_id_str
+    }
+
+
+@router.put("/{po_id}", response_model=PurchaseOrderOut)
+def update_purchase_order(
+    po_id: str,
+    po_data: POUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Update a Purchase Order in SellerCloud and locally in CRM.
+    """
+    import uuid
+    from app.services.sellercloud_client import sellercloud_client
+    from app.services.activity_service import log_activity
+    from app.routers.containers import resolve_warehouse_helper
+
+    try:
+        po_uuid = uuid.UUID(po_id)
+        po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_uuid).first()
+    except ValueError:
+        if po_id.isdigit():
+            po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.sellercloud_po_id == int(po_id)).first()
+        else:
+            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+
+    # Vendor permission check
+    if current_user.role == "vendor":
+        if po.vendor_id not in current_user.effective_vendor_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this Purchase Order")
+
+    # 1. Resolve updated vendor if supplied
+    vendor = None
+    if po_data.vendor_id is not None:
+        v_raw = str(po_data.vendor_id).strip()
+        try:
+            v_uuid = uuid.UUID(v_raw)
+            vendor = db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first()
+        except ValueError:
+            if v_raw.isdigit():
+                vendor = db.query(models.Vendor).filter(models.Vendor.sellercloud_vendor_id == int(v_raw)).first()
+            else:
+                vendor = db.query(models.Vendor).filter(models.Vendor.name.ilike(v_raw)).first()
+        if not vendor:
+            raise HTTPException(status_code=400, detail=f"Vendor '{po_data.vendor_id}' not found")
+        po.vendor_id = vendor.id
+
+    # 2. Resolve updated company if supplied
+    company = None
+    if po_data.company_id is not None:
+        c_raw = str(po_data.company_id).strip()
+        try:
+            c_uuid = uuid.UUID(c_raw)
+            company = db.query(models.Company).filter(models.Company.id == c_uuid).first()
+        except ValueError:
+            if c_raw.isdigit():
+                company = db.query(models.Company).filter(models.Company.sellercloud_company_id == int(c_raw)).first()
+            else:
+                company = db.query(models.Company).filter(models.Company.name.ilike(c_raw)).first()
+        if not company:
+            raise HTTPException(status_code=400, detail=f"Company '{po_data.company_id}' not found")
+        po.company_id = company.id
+
+    # 3. Resolve updated warehouse if supplied
+    warehouse = None
+    if po_data.warehouse_id is not None:
+        warehouse = resolve_warehouse_helper(db, warehouse_id=po_data.warehouse_id)
+        if warehouse:
+            po.warehouse_id = warehouse.id
+
+    # 4. Update header fields
+    if po_data.purchase_title is not None:
+        po.purchase_title = po_data.purchase_title
+    if po_data.expected_delivery_date is not None:
+        po.expected_delivery_date = po_data.expected_delivery_date
+    if po_data.container_lead_time_days is not None:
+        po.container_lead_time_days = po_data.container_lead_time_days
+    if po_data.notes is not None:
+        po.notes = po_data.notes
+
+    # 5. Sync header changes to SellerCloud if PO has sellercloud_po_id
+    if po.sellercloud_po_id:
+        sc_update_payload = {}
+        if po_data.purchase_title is not None:
+            sc_update_payload["Description"] = po_data.purchase_title
+        if warehouse and warehouse.sellercloud_warehouse_id:
+            sc_update_payload["DefaultWarehouseID"] = warehouse.sellercloud_warehouse_id
+        if vendor and vendor.sellercloud_vendor_id:
+            sc_update_payload["VendorId"] = vendor.sellercloud_vendor_id
+        if company and company.sellercloud_company_id:
+            sc_update_payload["CompanyId"] = company.sellercloud_company_id
+        if po_data.expected_delivery_date is not None:
+            sc_update_payload["ExpectedDeliveryDate"] = po_data.expected_delivery_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if po_data.notes is not None:
+            sc_update_payload["Instructions"] = po_data.notes
+
+        if sc_update_payload:
+            try:
+                sellercloud_client.update_purchase_order_full(po.sellercloud_po_id, sc_update_payload)
+            except Exception as e:
+                sc_err = str(e)
+                if hasattr(e, "response") and e.response is not None:
+                    try:
+                        err_text = e.response.text.strip().strip('"')
+                        if err_text:
+                            sc_err = err_text
+                    except Exception:
+                        pass
+                raise HTTPException(status_code=400, detail=f"SellerCloud Error updating PO header: {sc_err}")
+
+    # 6. Update Items if provided
+    if po_data.items is not None:
+        sc_items_payload = []
+        for it_data in po_data.items:
+            # Find item in local DB
+            local_item = None
+            if it_data.id:
+                local_item = db.query(models.PurchaseOrderItem).filter(
+                    models.PurchaseOrderItem.id == it_data.id,
+                    models.PurchaseOrderItem.purchase_order_id == po.id
+                ).first()
+            elif it_data.sellercloud_item_id:
+                local_item = db.query(models.PurchaseOrderItem).filter(
+                    models.PurchaseOrderItem.sellercloud_item_id == it_data.sellercloud_item_id,
+                    models.PurchaseOrderItem.purchase_order_id == po.id
+                ).first()
+            elif it_data.sku:
+                local_item = db.query(models.PurchaseOrderItem).filter(
+                    models.PurchaseOrderItem.sku == it_data.sku.strip(),
+                    models.PurchaseOrderItem.purchase_order_id == po.id
+                ).first()
+
+            if local_item:
+                if it_data.qty_ordered is not None:
+                    local_item.qty_ordered = it_data.qty_ordered
+                if it_data.unit_price is not None:
+                    local_item.unit_price = it_data.unit_price
+                if it_data.qty_cases_ordered is not None:
+                    local_item.qty_cases_ordered = it_data.qty_cases_ordered
+                if it_data.qty_units_per_case is not None:
+                    local_item.qty_units_per_case = it_data.qty_units_per_case
+                if it_data.case_price is not None:
+                    local_item.case_price = it_data.case_price
+                if it_data.expected_delivery_date is not None:
+                    local_item.expected_delivery_date = it_data.expected_delivery_date
+
+                if local_item.sellercloud_item_id:
+                    sc_item_entry = {
+                        "ID": local_item.sellercloud_item_id,
+                        "QtyUnitsOrdered": local_item.qty_ordered,
+                        "UnitPrice": float(local_item.unit_price or 0.0)
+                    }
+                    if local_item.qty_cases_ordered is not None:
+                        sc_item_entry["TotalCases"] = local_item.qty_cases_ordered
+                    if local_item.qty_units_per_case is not None:
+                        sc_item_entry["QtyPerCase"] = local_item.qty_units_per_case
+                    if local_item.case_price is not None:
+                        sc_item_entry["CostPerCase"] = float(local_item.case_price)
+                    sc_items_payload.append(sc_item_entry)
+
+        # Sync items to SellerCloud
+        if po.sellercloud_po_id and sc_items_payload:
+            try:
+                sellercloud_client.update_purchase_order_items(po.sellercloud_po_id, sc_items_payload)
+            except Exception as e:
+                sc_err = str(e)
+                if hasattr(e, "response") and e.response is not None:
+                    try:
+                        err_text = e.response.text.strip().strip('"')
+                        if err_text:
+                            sc_err = err_text
+                    except Exception:
+                        pass
+                raise HTTPException(status_code=400, detail=f"SellerCloud Error updating PO items: {sc_err}")
+
+    # Recalculate total_amount
+    all_po_items = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.purchase_order_id == po.id).all()
+    po.total_amount = sum((it.qty_ordered or 0) * float(it.unit_price or 0.0) for it in all_po_items)
+
+    db.commit()
+
+    # Log activity
+    log_activity(
+        db,
+        action="UPDATE_PO",
+        user_id=current_user.id,
+        entity_type="PURCHASE_ORDER",
+        entity_id=str(po.sellercloud_po_id or po.id),
+        details={"purchase_title": po.purchase_title}
+    )
+
+    # Reload with full relationships for PurchaseOrderOut response
+    updated_po = (
+        db.query(models.PurchaseOrder)
+        .options(
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.container_links).joinedload(models.PurchaseOrderItemContainer.container),
+            joinedload(models.PurchaseOrder.vendor),
+            joinedload(models.PurchaseOrder.company),
+            joinedload(models.PurchaseOrder.customer),
+            joinedload(models.PurchaseOrder.delay_reason_user),
+            joinedload(models.PurchaseOrder.comments),
+            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments).joinedload(models.PurchaseOrderItemComment.user),
+            joinedload(models.PurchaseOrder.comments).joinedload(models.PurchaseOrderComment.user)
+        )
+        .filter(models.PurchaseOrder.id == po.id)
+        .first()
+    )
+
+    return PurchaseOrderOut.model_validate(updated_po)
 
 
 @router.post("/{po_id}/comments", response_model=POCommentOut)

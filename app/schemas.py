@@ -759,6 +759,29 @@ class POCreate(BaseModel):
     items: List[POCreateItem] = Field(..., min_length=1, description="List of items to order (at least 1 required)")
 
 
+class POUpdateItem(BaseModel):
+    id: Optional[uuid.UUID] = Field(None, description="Local PurchaseOrderItem UUID if updating existing item")
+    sellercloud_item_id: Optional[int] = Field(None, description="SellerCloud Item ID if known")
+    sku: Optional[str] = Field(None, description="Product SKU")
+    qty_ordered: Optional[int] = Field(None, ge=1, description="Updated quantity")
+    unit_price: Optional[float] = Field(None, ge=0.0, description="Updated unit price")
+    qty_cases_ordered: Optional[int] = Field(None, ge=0)
+    qty_units_per_case: Optional[int] = Field(None, ge=0)
+    case_price: Optional[float] = Field(None, ge=0.0)
+    expected_delivery_date: Optional[datetime] = None
+
+
+class POUpdate(BaseModel):
+    purchase_title: Optional[str] = Field(None, description="Updated PO title / Description in SellerCloud")
+    vendor_id: Optional[Union[uuid.UUID, int, str]] = Field(None, description="Vendor UUID or SellerCloud Vendor ID")
+    company_id: Optional[Union[uuid.UUID, int, str]] = Field(None, description="Company UUID or SellerCloud Company ID")
+    warehouse_id: Optional[Union[uuid.UUID, int, str]] = Field(None, description="Warehouse UUID or SellerCloud Warehouse ID")
+    expected_delivery_date: Optional[datetime] = Field(None, description="Expected delivery date")
+    container_lead_time_days: Optional[int] = Field(None, description="PO lead time in days")
+    notes: Optional[str] = Field(None, description="Notes for this PO")
+    items: Optional[List[POUpdateItem]] = Field(None, description="Updated items list")
+
+
 class POCommentCreate(BaseModel):
     comment: str
     parent_id: Optional[uuid.UUID] = None
