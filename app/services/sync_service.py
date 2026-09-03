@@ -677,17 +677,20 @@ def _get_or_create_vendor(db: Session, vendor_sc_id):
 def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
     """
     Upserts PO line items — UPDATE existing rows matched by sellercloud_item_id,
-    INSERT new ones.  This replaces the old delete-all-then-insert pattern so that
-    PurchaseOrderItemContainer rows (container links) are NEVER wiped when a PO is
-    re-synced.
+    or link existing unlinked rows created from CRM (sellercloud_item_id is NULL),
+    INSERT new ones, and cleans up any unlinked phantom duplicates.
+    This preserves PurchaseOrderItemContainer rows (container links).
 
     Confirmed structure of detail["Items"][x]:
       ID, PurchaseID, ProductID (= SKU), ProductName, QtyOrdered, QtyReceived,
       QtyInContainer, UnitPrice, QtyPerCase, TotalCases, CostPerCase, IsKit,
       ExpectedDeliveryDate.
     """
+    matched_item_db_ids = set()
+
     for li in items:
         sc_item_id = li.get("ID")
+        sku_val = li.get("ProductID") or li.get("SKU")
         existing = None
         if sc_item_id:
             existing = (
@@ -699,6 +702,20 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
                 .first()
             )
 
+        # Fallback: match unlinked item created via CRM before sync
+        if not existing and sku_val:
+            query = (
+                db.query(models.PurchaseOrderItem)
+                .filter(
+                    models.PurchaseOrderItem.purchase_order_id == po_row_id,
+                    models.PurchaseOrderItem.sellercloud_item_id.is_(None),
+                    models.PurchaseOrderItem.sku == sku_val,
+                )
+            )
+            if matched_item_db_ids:
+                query = query.filter(~models.PurchaseOrderItem.id.in_(matched_item_db_ids))
+            existing = query.first()
+
         raw_image_url = li.get("ImageURL")
         image_url = None
         if raw_image_url:
@@ -707,7 +724,7 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
         fields = dict(
             purchase_order_id=po_row_id,
             sellercloud_item_id=sc_item_id,
-            sku=li.get("ProductID") or li.get("SKU"),
+            sku=sku_val,
             product_name=li.get("ProductName"),
             image_url=image_url,
             qty_ordered=li.get("QtyOrdered", 0),
@@ -734,12 +751,57 @@ def _upsert_items(db: Session, po_row_id, items: list, parent_item_id=None):
             for k, v in fields.items():
                 if k != "purchase_order_id":  # never change parent FK
                     setattr(existing, k, v)
+            matched_item_db_ids.add(existing.id)
         else:
-            db.add(models.PurchaseOrderItem(**fields))
+            new_item = models.PurchaseOrderItem(**fields)
+            db.add(new_item)
+            db.flush()
+            matched_item_db_ids.add(new_item.id)
 
         nested = li.get("Items") or []
         if nested:
             _upsert_items(db, po_row_id, nested, parent_item_id=sc_item_id)
+
+    # Clean up any leftover duplicate/orphan rows with sellercloud_item_id IS NULL for this PO
+    if parent_item_id is None:
+        orphan_items = (
+            db.query(models.PurchaseOrderItem)
+            .filter(
+                models.PurchaseOrderItem.purchase_order_id == po_row_id,
+                models.PurchaseOrderItem.sellercloud_item_id.is_(None)
+            )
+            .all()
+        )
+        for orphan in orphan_items:
+            if orphan.id not in matched_item_db_ids:
+                # Find if there is a corresponding synced item with the same SKU
+                matched_target = (
+                    db.query(models.PurchaseOrderItem)
+                    .filter(
+                        models.PurchaseOrderItem.purchase_order_id == po_row_id,
+                        models.PurchaseOrderItem.sku == orphan.sku,
+                        models.PurchaseOrderItem.id != orphan.id,
+                        models.PurchaseOrderItem.sellercloud_item_id.isnot(None)
+                    )
+                    .first()
+                )
+                if matched_target:
+                    # Migrate any container links from orphan to matched_target
+                    for link in orphan.container_links:
+                        existing_link = (
+                            db.query(models.PurchaseOrderItemContainer)
+                            .filter(
+                                models.PurchaseOrderItemContainer.purchase_order_item_id == matched_target.id,
+                                models.PurchaseOrderItemContainer.shipping_container_id == link.shipping_container_id
+                            )
+                            .first()
+                        )
+                        if not existing_link:
+                            link.purchase_order_item_id = matched_target.id
+                    # Migrate any item comments
+                    for comm in orphan.comments:
+                        comm.purchase_order_item_id = matched_target.id
+                db.delete(orphan)
 
 
 def sync_purchase_orders(db: Session, view_id: int = None, max_pages: int = 100) -> int:

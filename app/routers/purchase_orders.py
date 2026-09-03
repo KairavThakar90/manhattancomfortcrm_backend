@@ -188,23 +188,36 @@ def create_purchase_order(
     db.add(new_po)
     db.flush()
 
+    items_synced = False
+    try:
+        from app.services.sync_service import _upsert_items
+        sc_detail = sellercloud_client.get_purchase_order_detail(sc_po_id)
+        if sc_detail and sc_detail.get("Items"):
+            _upsert_items(db, new_po.id, sc_detail.get("Items"))
+            items_synced = True
+    except Exception as e:
+        print(f"Immediate sync of newly created PO {sc_po_id} items failed: {e}")
+
+    if not items_synced:
+        for it in po_data.items:
+            clean_sku = it.sku.strip()
+            new_item = models.PurchaseOrderItem(
+                purchase_order_id=new_po.id,
+                sku=clean_sku,
+                product_name=clean_sku,
+                qty_ordered=it.qty_ordered,
+                qty_received=0,
+                qty_in_container=0,
+                unit_price=it.unit_price or 0.0,
+                qty_cases_ordered=it.qty_cases_ordered or 0,
+                qty_units_per_case=it.qty_units_per_case or 0,
+                case_price=it.case_price or 0.0,
+                expected_delivery_date=po_data.expected_delivery_date
+            )
+            db.add(new_item)
+
     for it in po_data.items:
         clean_sku = it.sku.strip()
-        new_item = models.PurchaseOrderItem(
-            purchase_order_id=new_po.id,
-            sku=clean_sku,
-            product_name=clean_sku,
-            qty_ordered=it.qty_ordered,
-            qty_received=0,
-            qty_in_container=0,
-            unit_price=it.unit_price or 0.0,
-            qty_cases_ordered=it.qty_cases_ordered or 0,
-            qty_units_per_case=it.qty_units_per_case or 0,
-            case_price=it.case_price or 0.0,
-            expected_delivery_date=po_data.expected_delivery_date
-        )
-        db.add(new_item)
-
         # Also ensure SKU is tracked in products catalog table
         existing_prod = db.query(models.Product).filter(models.Product.sku == clean_sku).first()
         if not existing_prod:
