@@ -684,8 +684,15 @@ def list_purchase_orders(
     if customer_id:
         try:
             import uuid
-            cust_uuid = uuid.UUID(str(customer_id).strip())
-            q = q.filter(models.PurchaseOrder.customer_id == cust_uuid)
+            cust_str = str(customer_id).strip()
+            if cust_str in ("00000000-0000-0000-0000-000000000000", "0", "null", "none"):
+                q = q.filter(models.PurchaseOrder.customer_id.is_(None))
+            else:
+                cust_uuid = uuid.UUID(cust_str)
+                if cust_uuid == uuid.UUID("00000000-0000-0000-0000-000000000000"):
+                    q = q.filter(models.PurchaseOrder.customer_id.is_(None))
+                else:
+                    q = q.filter(models.PurchaseOrder.customer_id == cust_uuid)
         except ValueError:
             pass
 
@@ -924,8 +931,8 @@ def list_purchase_orders(
         po_dict = po.model_dump(mode='python', exclude={'items', 'comments'})
         if not po_dict.get('customer'):
             po_dict['customer'] = {
-                "id": None,
-                "sellercloud_customer_id": None,
+                "id": "00000000-0000-0000-0000-000000000000",
+                "sellercloud_customer_id": 0,
                 "company_id": po_dict.get("company_id"),
                 "first_name": "Manhattan",
                 "last_name": "Manhattan Comfort",

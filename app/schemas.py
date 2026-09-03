@@ -299,7 +299,7 @@ class CustomerOut(BaseModel):
     phone: Optional[str] = None
     billing_city: Optional[str] = None
     shipping_city: Optional[str] = None
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
     po_count: int = 0
 
 

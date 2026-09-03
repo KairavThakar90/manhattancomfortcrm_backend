@@ -69,6 +69,7 @@ def list_customers(
                 "phone": "",
                 "company_id": None,
                 "is_active": True,
+                "updated_at": None,
                 "po_count": unassigned_po_count
             })
             total += 1
@@ -88,4 +89,16 @@ def list_customers(
 
 @router.get("/{customer_id}", response_model=CustomerOut)
 def get_customer(customer_id: str, db: Session = Depends(get_db)):
+    if customer_id == "00000000-0000-0000-0000-000000000000":
+        return {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "sellercloud_customer_id": 0,
+            "first_name": "Manhattan",
+            "last_name": "Manhattan Comfort",
+            "email": "",
+            "phone": "",
+            "company_id": None,
+            "is_active": True,
+            "updated_at": None
+        }
     return db.query(models.Customer).filter(models.Customer.id == customer_id).first()
