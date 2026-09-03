@@ -109,9 +109,9 @@ def create_purchase_order(
         sc_products.append(p_entry)
 
     sc_payload = {
-        "CompanyID": company.sellercloud_company_id,
+        "CompanyID": company.sellercloud_company_id or 255,
         "VendorID": vendor.sellercloud_vendor_id,
-        "POType": "PurchaseOrder",
+        "POType": 0,  # 0 = PurchaseOrder, 1 = CreditMemo, 2 = VendorOffer
         "CaseQtyMode": any(bool(it.qty_cases_ordered) for it in po_data.items),
         "Products": sc_products
     }
@@ -129,7 +129,37 @@ def create_purchase_order(
     try:
         sc_po_id = sellercloud_client.create_purchase_order(sc_payload)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to create Purchase Order in SellerCloud: {str(e)}")
+        sc_error_detail = str(e)
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                err_text = e.response.text.strip().strip('"')
+                if err_text:
+                    sc_error_detail = err_text
+            except Exception:
+                pass
+        
+        # If SellerCloud rejected because SKU is not yet in Catalog, auto-create SKU in SC and retry!
+        if "Cannot find product" in sc_error_detail or "not found" in sc_error_detail.lower():
+            try:
+                for it in po_data.items:
+                    sellercloud_client.create_product(
+                        sku=it.sku.strip(),
+                        product_name=it.sku.strip(),
+                        company_id=company.sellercloud_company_id or 255,
+                        vendor_id=vendor.sellercloud_vendor_id,
+                        site_cost=it.unit_price or 0.0
+                    )
+                sc_po_id = sellercloud_client.create_purchase_order(sc_payload)
+            except Exception as retry_err:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"SellerCloud Error: {sc_error_detail}"
+                )
+        else:
+            raise HTTPException(
+                status_code=502, 
+                detail=f"SellerCloud Error: {sc_error_detail}"
+            )
 
     # 6. Save in Local Database
     total_amount = sum(it.qty_ordered * (it.unit_price or 0.0) for it in po_data.items)
@@ -159,10 +189,11 @@ def create_purchase_order(
     db.flush()
 
     for it in po_data.items:
+        clean_sku = it.sku.strip()
         new_item = models.PurchaseOrderItem(
             purchase_order_id=new_po.id,
-            sku=it.sku.strip(),
-            product_name=it.sku.strip(),
+            sku=clean_sku,
+            product_name=clean_sku,
             qty_ordered=it.qty_ordered,
             qty_received=0,
             qty_in_container=0,
@@ -173,6 +204,19 @@ def create_purchase_order(
             expected_delivery_date=po_data.expected_delivery_date
         )
         db.add(new_item)
+
+        # Also ensure SKU is tracked in products catalog table
+        existing_prod = db.query(models.Product).filter(models.Product.sku == clean_sku).first()
+        if not existing_prod:
+            db.add(
+                models.Product(
+                    sku=clean_sku,
+                    product_name=clean_sku,
+                    vendor_id=vendor.id,
+                    price=it.unit_price or 0.0,
+                    is_active=True
+                )
+            )
 
     db.commit()
     

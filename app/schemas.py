@@ -1146,6 +1146,7 @@ class ProductCreate(BaseModel):
     sku: str
     product_name: Optional[str] = None
     vendor_id: Optional[Union[uuid.UUID, str]] = None
+    company_id: Optional[Union[uuid.UUID, int, str]] = None
     date: Optional[datetime] = None
     price: Optional[float] = None
     is_active: Optional[bool] = True

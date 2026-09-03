@@ -179,6 +179,34 @@ class SellerCloudClient:
         resp = self._request("GET", f"/api/PurchaseOrders/{po_id}")
         return resp.json()
 
+    def create_product(
+        self, 
+        sku: str, 
+        product_name: str, 
+        company_id: int = 255, 
+        vendor_id: Optional[int] = None, 
+        site_cost: Optional[float] = None
+    ) -> str:
+        """
+        Create a new product in SellerCloud Catalog.
+        POST /api/Products
+        Returns the created SKU.
+        """
+        payload = {
+            "CompanyId": company_id,
+            "ProductSKU": sku.strip(),
+            "ProductName": product_name or sku.strip(),
+            "ProductTypeName": "Normal",
+        }
+        if vendor_id is not None:
+            payload["VendorID"] = vendor_id
+        if site_cost is not None:
+            payload["SiteCost"] = float(site_cost)
+            payload["VendorPrice"] = float(site_cost)
+
+        resp = self._request("POST", "/api/Products", json=payload)
+        return resp.text.strip().strip('"')
+
     def create_purchase_order(self, payload: dict) -> int:
         """
         Create a new Purchase Order in SellerCloud.

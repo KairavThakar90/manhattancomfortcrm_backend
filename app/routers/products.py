@@ -150,6 +150,39 @@ def create_product(
     db.add(product)
     db.commit()
     db.refresh(product)
+
+    # Automatically register SKU in SellerCloud Catalog if vendor has a SellerCloud ID
+    if v_uuid:
+        vendor_obj = db.query(models.Vendor).filter(models.Vendor.id == v_uuid).first()
+        if vendor_obj and vendor_obj.sellercloud_vendor_id:
+            sc_company_id = 255
+            if payload.company_id:
+                c_raw = str(payload.company_id).strip()
+                try:
+                    c_uuid = uuid.UUID(c_raw)
+                    comp = db.query(models.Company).filter(models.Company.id == c_uuid).first()
+                    if comp and comp.sellercloud_company_id:
+                        sc_company_id = comp.sellercloud_company_id
+                except ValueError:
+                    if c_raw.isdigit():
+                        sc_company_id = int(c_raw)
+                    else:
+                        comp = db.query(models.Company).filter(models.Company.name.ilike(c_raw)).first()
+                        if comp and comp.sellercloud_company_id:
+                            sc_company_id = comp.sellercloud_company_id
+
+            try:
+                from app.services.sellercloud_client import sellercloud_client
+                sellercloud_client.create_product(
+                    sku=product.sku,
+                    product_name=product.product_name or product.sku,
+                    company_id=sc_company_id,
+                    vendor_id=vendor_obj.sellercloud_vendor_id,
+                    site_cost=product.price
+                )
+            except Exception as exc:
+                print(f"[create_product] Notice: SellerCloud product sync: {exc}")
+
     return product
 
 
