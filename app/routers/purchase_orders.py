@@ -1230,6 +1230,7 @@ def update_purchase_order(
     if po_data.items is not None:
         sc_items_payload = []
         for it_data in po_data.items:
+            clean_sku = it_data.sku.strip() if it_data.sku else None
             # Find item in local DB
             local_item = None
             if it_data.id:
@@ -1242,13 +1243,14 @@ def update_purchase_order(
                     models.PurchaseOrderItem.sellercloud_item_id == it_data.sellercloud_item_id,
                     models.PurchaseOrderItem.purchase_order_id == po.id
                 ).first()
-            elif it_data.sku:
+            elif clean_sku:
                 local_item = db.query(models.PurchaseOrderItem).filter(
-                    models.PurchaseOrderItem.sku == it_data.sku.strip(),
+                    models.PurchaseOrderItem.sku == clean_sku,
                     models.PurchaseOrderItem.purchase_order_id == po.id
                 ).first()
 
             if local_item:
+                # Update existing line item
                 if it_data.qty_ordered is not None:
                     local_item.qty_ordered = it_data.qty_ordered
                 if it_data.unit_price is not None:
@@ -1275,11 +1277,63 @@ def update_purchase_order(
                     if local_item.case_price is not None:
                         sc_item_entry["CostPerCase"] = float(local_item.case_price)
                     sc_items_payload.append(sc_item_entry)
+            elif clean_sku:
+                # Add brand new line item to this PO
+                new_item = models.PurchaseOrderItem(
+                    purchase_order_id=po.id,
+                    sku=clean_sku,
+                    product_name=clean_sku,
+                    qty_ordered=it_data.qty_ordered or 1,
+                    qty_received=0,
+                    qty_in_container=0,
+                    unit_price=it_data.unit_price or 0.0,
+                    qty_cases_ordered=it_data.qty_cases_ordered or 0,
+                    qty_units_per_case=it_data.qty_units_per_case or 0,
+                    case_price=it_data.case_price or 0.0,
+                    expected_delivery_date=it_data.expected_delivery_date or po.expected_delivery_date
+                )
+                db.add(new_item)
+
+                # Ensure SKU is tracked in products catalog
+                existing_prod = db.query(models.Product).filter(models.Product.sku == clean_sku).first()
+                if not existing_prod:
+                    db.add(
+                        models.Product(
+                            sku=clean_sku,
+                            product_name=clean_sku,
+                            vendor_id=po.vendor_id,
+                            price=it_data.unit_price or 0.0,
+                            is_active=True
+                        )
+                    )
+
+                sc_item_entry = {
+                    "ProductID": clean_sku,
+                    "QtyUnitsOrdered": it_data.qty_ordered or 1,
+                    "UnitPrice": float(it_data.unit_price or 0.0)
+                }
+                if it_data.qty_cases_ordered:
+                    sc_item_entry["TotalCases"] = it_data.qty_cases_ordered
+                if it_data.qty_units_per_case:
+                    sc_item_entry["QtyPerCase"] = it_data.qty_units_per_case
+                if it_data.case_price:
+                    sc_item_entry["CostPerCase"] = float(it_data.case_price)
+                sc_items_payload.append(sc_item_entry)
+
+        db.flush()
 
         # Sync items to SellerCloud
         if po.sellercloud_po_id and sc_items_payload:
             try:
                 sellercloud_client.update_purchase_order_items(po.sellercloud_po_id, sc_items_payload)
+                # Re-sync detail from SellerCloud to assign SellerCloud item IDs for any newly added items
+                try:
+                    from app.services.sync_service import _upsert_items
+                    sc_detail = sellercloud_client.get_purchase_order_detail(po.sellercloud_po_id)
+                    if sc_detail and sc_detail.get("Items"):
+                        _upsert_items(db, po.id, sc_detail.get("Items"))
+                except Exception as sync_e:
+                    print(f"Re-syncing PO {po.sellercloud_po_id} items after update failed: {sync_e}")
             except Exception as e:
                 sc_err = str(e)
                 if hasattr(e, "response") and e.response is not None:
