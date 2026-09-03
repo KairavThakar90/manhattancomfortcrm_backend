@@ -273,7 +273,16 @@ class SellerCloudClient:
         """
         payload = {"Items": items_payload}
         resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}/Items", json=payload)
-        return resp.status_code == 200
+        return resp.status_code in (200, 204)
+
+    def delete_purchase_order_items(self, po_id: int, item_ids: list[int]) -> bool:
+        """
+        Delete specific line items from a Purchase Order in SellerCloud.
+        DELETE /api/PurchaseOrders/{po_id}/Items
+        """
+        payload = {"PoItemsIDs": item_ids}
+        resp = self._request("DELETE", f"/api/PurchaseOrders/{po_id}/Items", json=payload)
+        return resp.status_code in (200, 204)
 
     # Alias used by the single-PO sync endpoint in the purchase_orders router
     def get_purchase_order_detail(self, po_id: int) -> dict:

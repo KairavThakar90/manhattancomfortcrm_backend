@@ -1227,30 +1227,28 @@ def update_purchase_order(
                         pass
                 raise HTTPException(status_code=400, detail=f"SellerCloud Error updating PO header: {sc_err}")
 
-    # 6. Update Items if provided
+    # 6. Update / Add / Delete Items if provided
     if po_data.items is not None:
+        existing_items = db.query(models.PurchaseOrderItem).filter(
+            models.PurchaseOrderItem.purchase_order_id == po.id
+        ).all()
+
+        retained_item_ids = set()
         sc_items_payload = []
+
         for it_data in po_data.items:
             clean_sku = it_data.sku.strip() if it_data.sku else None
-            # Find item in local DB
+            # Find item in existing list
             local_item = None
             if it_data.id:
-                local_item = db.query(models.PurchaseOrderItem).filter(
-                    models.PurchaseOrderItem.id == it_data.id,
-                    models.PurchaseOrderItem.purchase_order_id == po.id
-                ).first()
+                local_item = next((it for it in existing_items if it.id == it_data.id), None)
             elif it_data.sellercloud_item_id:
-                local_item = db.query(models.PurchaseOrderItem).filter(
-                    models.PurchaseOrderItem.sellercloud_item_id == it_data.sellercloud_item_id,
-                    models.PurchaseOrderItem.purchase_order_id == po.id
-                ).first()
+                local_item = next((it for it in existing_items if it.sellercloud_item_id == it_data.sellercloud_item_id), None)
             elif clean_sku:
-                local_item = db.query(models.PurchaseOrderItem).filter(
-                    models.PurchaseOrderItem.sku == clean_sku,
-                    models.PurchaseOrderItem.purchase_order_id == po.id
-                ).first()
+                local_item = next((it for it in existing_items if it.sku == clean_sku), None)
 
             if local_item:
+                retained_item_ids.add(local_item.id)
                 # Update existing line item
                 if it_data.qty_ordered is not None:
                     local_item.qty_ordered = it_data.qty_ordered
@@ -1294,6 +1292,8 @@ def update_purchase_order(
                     expected_delivery_date=it_data.expected_delivery_date or po.expected_delivery_date
                 )
                 db.add(new_item)
+                db.flush()
+                retained_item_ids.add(new_item.id)
 
                 # Ensure SKU is tracked in products catalog
                 existing_prod = db.query(models.Product).filter(models.Product.sku == clean_sku).first()
@@ -1321,9 +1321,48 @@ def update_purchase_order(
                     sc_item_entry["CostPerCase"] = float(it_data.case_price)
                 sc_items_payload.append(sc_item_entry)
 
+        # 6a. Identify and Delete removed items
+        removed_items = [it for it in existing_items if it.id not in retained_item_ids]
+        sc_item_ids_to_delete = []
+        for rem_it in removed_items:
+            # Guardrail: Check container assignment
+            if (rem_it.qty_in_container or 0) > 0 or rem_it.container_links:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot remove item '{rem_it.sku}' from PO: It is currently assigned to shipping container(s). Please remove it from the container first."
+                )
+            # Guardrail: Check received goods
+            if (rem_it.qty_received or 0) > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot remove item '{rem_it.sku}' from PO: Goods have already been received ({rem_it.qty_received} units received)."
+                )
+
+            if rem_it.sellercloud_item_id:
+                sc_item_ids_to_delete.append(rem_it.sellercloud_item_id)
+
+        # Delete removed items in SellerCloud
+        if po.sellercloud_po_id and sc_item_ids_to_delete:
+            try:
+                sellercloud_client.delete_purchase_order_items(po.sellercloud_po_id, sc_item_ids_to_delete)
+            except Exception as e:
+                sc_err = str(e)
+                if hasattr(e, "response") and e.response is not None:
+                    try:
+                        err_text = e.response.text.strip().strip('"')
+                        if err_text:
+                            sc_err = err_text
+                    except Exception:
+                        pass
+                raise HTTPException(status_code=400, detail=f"SellerCloud Error deleting removed PO items: {sc_err}")
+
+        # Delete removed items in local DB
+        for rem_it in removed_items:
+            db.delete(rem_it)
+
         db.flush()
 
-        # Sync items to SellerCloud
+        # 6b. Sync updated/new items to SellerCloud
         if po.sellercloud_po_id and sc_items_payload:
             try:
                 sellercloud_client.update_purchase_order_items(po.sellercloud_po_id, sc_items_payload)
