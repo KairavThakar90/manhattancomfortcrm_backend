@@ -1247,7 +1247,8 @@ def update_purchase_order(
                 print(f"Pre-update sync of PO {po.sellercloud_po_id} items failed: {pre_sync_e}")
 
         retained_item_ids = set()
-        sc_items_payload = []
+        sc_items_to_update = []
+        sc_items_to_add = []
 
         for it_data in po_data.items:
             clean_sku = it_data.sku.strip() if it_data.sku else None
@@ -1301,7 +1302,7 @@ def update_purchase_order(
                         sc_item_entry["QtyPerCase"] = local_item.qty_units_per_case
                     if local_item.case_price is not None:
                         sc_item_entry["CostPerCase"] = float(local_item.case_price)
-                    sc_items_payload.append(sc_item_entry)
+                    sc_items_to_update.append(sc_item_entry)
             elif clean_sku:
                 # Add brand new line item to this PO
                 new_item = models.PurchaseOrderItem(
@@ -1345,7 +1346,7 @@ def update_purchase_order(
                     sc_item_entry["QtyPerCase"] = it_data.qty_units_per_case
                 if it_data.case_price:
                     sc_item_entry["CostPerCase"] = float(it_data.case_price)
-                sc_items_payload.append(sc_item_entry)
+                sc_items_to_add.append(sc_item_entry)
 
         # 6a. Identify and Delete removed items
         removed_items = [it for it in existing_items if it.id not in retained_item_ids]
@@ -1388,18 +1389,10 @@ def update_purchase_order(
 
         db.flush()
 
-        # 6b. Sync updated/new items to SellerCloud
-        if po.sellercloud_po_id and sc_items_payload:
+        # 6b. Sync updated existing items to SellerCloud (PUT /Items)
+        if po.sellercloud_po_id and sc_items_to_update:
             try:
-                sellercloud_client.update_purchase_order_items(po.sellercloud_po_id, sc_items_payload)
-                # Re-sync detail from SellerCloud to assign SellerCloud item IDs for any newly added items
-                try:
-                    from app.services.sync_service import _upsert_items
-                    sc_detail = sellercloud_client.get_purchase_order_detail(po.sellercloud_po_id)
-                    if sc_detail and sc_detail.get("Items"):
-                        _upsert_items(db, po.id, sc_detail.get("Items"))
-                except Exception as sync_e:
-                    print(f"Re-syncing PO {po.sellercloud_po_id} items after update failed: {sync_e}")
+                sellercloud_client.update_purchase_order_items(po.sellercloud_po_id, sc_items_to_update)
             except Exception as e:
                 sc_err = str(e)
                 if hasattr(e, "response") and e.response is not None:
@@ -1410,6 +1403,31 @@ def update_purchase_order(
                     except Exception:
                         pass
                 raise HTTPException(status_code=400, detail=f"SellerCloud Error updating PO items: {sc_err}")
+
+        # 6c. Add new products to SellerCloud (POST /Items)
+        if po.sellercloud_po_id and sc_items_to_add:
+            try:
+                sellercloud_client.add_purchase_order_items(po.sellercloud_po_id, sc_items_to_add)
+            except Exception as e:
+                sc_err = str(e)
+                if hasattr(e, "response") and e.response is not None:
+                    try:
+                        err_text = e.response.text.strip().strip('"')
+                        if err_text:
+                            sc_err = err_text
+                    except Exception:
+                        pass
+                raise HTTPException(status_code=400, detail=f"SellerCloud Error adding new PO items: {sc_err}")
+
+        # Re-sync detail from SellerCloud to assign SellerCloud item IDs for any newly added items
+        if po.sellercloud_po_id and (sc_items_to_update or sc_items_to_add):
+            try:
+                from app.services.sync_service import _upsert_items
+                sc_detail = sellercloud_client.get_purchase_order_detail(po.sellercloud_po_id)
+                if sc_detail and sc_detail.get("Items"):
+                    _upsert_items(db, po.id, sc_detail.get("Items"))
+            except Exception as sync_e:
+                print(f"Re-syncing PO {po.sellercloud_po_id} items after update failed: {sync_e}")
 
     # Recalculate total_amount
     all_po_items = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.purchase_order_id == po.id).all()

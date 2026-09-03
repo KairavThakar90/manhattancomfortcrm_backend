@@ -275,6 +275,14 @@ class SellerCloudClient:
         resp = self._request("PUT", f"/api/PurchaseOrders/{po_id}/Items", json=payload)
         return resp.status_code in (200, 204)
 
+    def add_purchase_order_items(self, po_id: int, items_payload: list) -> bool:
+        """
+        Add new products/items to an existing Purchase Order in SellerCloud.
+        POST /api/PurchaseOrders/{po_id}/Items
+        """
+        resp = self._request("POST", f"/api/PurchaseOrders/{po_id}/Items", json=items_payload)
+        return resp.status_code in (200, 201, 204)
+
     def delete_purchase_order_items(self, po_id: int, item_ids: list[int]) -> bool:
         """
         Delete specific line items from a Purchase Order in SellerCloud.
