@@ -27,6 +27,17 @@ from app.services.activity_service import log_activity
 router = APIRouter(prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=[Depends(get_current_user)])
 
 
+def po_id_filter_clause(po_id: str):
+    """Resolve a path-supplied PO identifier (UUID, raw SellerCloud int ID, or "PO-<id>") to a filter clause."""
+    raw_id = po_id[3:] if po_id.upper().startswith("PO-") else po_id
+    try:
+        return models.PurchaseOrder.id == uuid.UUID(raw_id)
+    except ValueError:
+        if raw_id.isdigit():
+            return models.PurchaseOrder.sellercloud_po_id == int(raw_id)
+        raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID, SellerCloud integer ID, or 'PO-<id>'.")
+
+
 @router.post("", response_model=PurchaseOrderOut, status_code=201)
 @router.post("/", response_model=PurchaseOrderOut, status_code=201)
 def create_purchase_order(
@@ -310,7 +321,6 @@ async def process_comment_tags(db, tagged_user_ids, commenter_name, link, backgr
             comment_text=comment_text,
             attachments=attachments
         )
-
 
 
 @router.get("/filters/all-categories")
@@ -961,15 +971,7 @@ def list_purchase_orders(
 
 @router.get("/{po_id}", response_model=PurchaseOrderOut)
 def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
-    import uuid
-    try:
-        po_uuid = uuid.UUID(po_id)
-        filter_clause = models.PurchaseOrder.id == po_uuid
-    except ValueError:
-        if po_id.isdigit():
-            filter_clause = models.PurchaseOrder.sellercloud_po_id == int(po_id)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+    filter_clause = po_id_filter_clause(po_id)
 
     po = (
         db.query(models.PurchaseOrder)
@@ -1509,27 +1511,19 @@ async def add_po_comment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    import uuid
     import json
     from app.config import settings
     from app.services.gcs_service import upload_file_to_gcs
-    try:
-        po_uuid = uuid.UUID(po_id)
-        filter_clause = models.PurchaseOrder.id == po_uuid
-    except ValueError:
-        if po_id.isdigit():
-            filter_clause = models.PurchaseOrder.sellercloud_po_id == int(po_id)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid PO ID format. Must be a UUID or SellerCloud integer ID.")
+    filter_clause = po_id_filter_clause(po_id)
 
     po = db.query(models.PurchaseOrder).filter(filter_clause).first()
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
-        
+
     if current_user.role == "vendor":
         if po.vendor_id not in current_user.effective_vendor_ids:
             raise HTTPException(status_code=403, detail="Not authorized to comment on this PO")
-            
+
     if not comment:
         try:
             body = await request.json()
@@ -1824,7 +1818,7 @@ def get_po_item_comments(
     if current_user.role == "vendor":
         if not item.purchase_order or item.purchase_order.vendor_id not in current_user.effective_vendor_ids:
             raise HTTPException(status_code=403, detail="Not authorized to view comments for this item")
- 
+
     comments = (
         db.query(models.PurchaseOrderItemComment)
         .options(joinedload(models.PurchaseOrderItemComment.user))
@@ -1835,6 +1829,7 @@ def get_po_item_comments(
     for comment in comments:
         comment.user_name = comment.user.full_name or comment.user.email if comment.user else None
     return comments
+
 
 @router.post("/items/{item_id}/comments", response_model=POItemCommentOut)
 async def add_po_item_comment(
@@ -3095,26 +3090,39 @@ def update_po_lead_time(
 
 @router.patch("/bulk/warehouse")
 def update_bulk_po_warehouse(
-    data: schemas.BulkPOWarehouseUpdate,
+    data: Optional[schemas.BulkPOWarehouseUpdate] = Body(None),
+    po_ids: Optional[List[str]] = Query(None, description="List of PO UUIDs or SellerCloud PO IDs (as query params, alternative to JSON body)"),
+    warehouse_id: Optional[str] = Query(None, description="UUID of the new warehouse (as query param, alternative to JSON body)"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
     """
     Update receiving warehouse for multiple purchase orders in both local DB and SellerCloud.
+
+    Accepts po_ids and warehouse_id either as a JSON body ({"po_ids": [...], "warehouse_id": "..."})
+    or as query parameters (?po_ids=1&po_ids=2&warehouse_id=...).
     """
     if current_user.role == "vendor":
         raise HTTPException(status_code=403, detail="Vendors cannot update warehouse")
 
+    resolved_po_ids = data.po_ids if data else po_ids
+    resolved_warehouse_id = data.warehouse_id if data else warehouse_id
+
+    if not resolved_po_ids:
+        raise HTTPException(status_code=422, detail="po_ids is required (in JSON body or as query params)")
+    if not resolved_warehouse_id:
+        raise HTTPException(status_code=422, detail="warehouse_id is required (in JSON body or as a query param)")
+
     try:
         import uuid
-        w_uuid = uuid.UUID(data.warehouse_id)
+        w_uuid = uuid.UUID(resolved_warehouse_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid warehouse_id format (must be UUID)")
-        
+
     warehouse = db.query(models.Warehouse).filter(models.Warehouse.id == w_uuid).first()
     if not warehouse:
-        raise HTTPException(status_code=404, detail=f"Warehouse '{data.warehouse_id}' not found")
-        
+        raise HTTPException(status_code=404, detail=f"Warehouse '{resolved_warehouse_id}' not found")
+
     if not warehouse.sellercloud_warehouse_id:
         raise HTTPException(status_code=400, detail="Warehouse must have a SellerCloud ID to sync")
 
@@ -3123,7 +3131,7 @@ def update_bulk_po_warehouse(
     updated_pos = []
     failed_pos = []
 
-    for po_id in data.po_ids:
+    for po_id in resolved_po_ids:
         po = None
         # Try to parse as integer (sellercloud_po_id)
         try:
@@ -3864,58 +3872,62 @@ def export_multiple_pos_csv(
     db: Session = Depends(get_db)
 ):
     """
-    Export POs to a single CSV file.
-    Can be filtered by a list of PO IDs or by a specific filter status.
-    Columns can be customized.
-    """
-    from datetime import timezone, timedelta
-    from sqlalchemy import and_
-    cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
-    today = datetime.now(timezone.utc).date()
+    Export multiple POs to a single CSV file.
 
-    base_q = (
-        db.query(models.PurchaseOrder)
-        .options(
-            joinedload(models.PurchaseOrder.items)
-                .joinedload(models.PurchaseOrderItem.container_links)
-                .joinedload(models.PurchaseOrderItemContainer.container),
-            joinedload(models.PurchaseOrder.vendor),
-            joinedload(models.PurchaseOrder.customer),
-            joinedload(models.PurchaseOrder.channel),
-            joinedload(models.PurchaseOrder.comments),
-            joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
-            joinedload(models.PurchaseOrder.comments)
-                .joinedload(models.PurchaseOrderComment.user)
-        )
+    Provide a list of SellerCloud PO IDs (or internal PO UUIDs) to export, or a
+    "filter_status" (invoice_delayed, delivery_delayed, lefts_items) to export a
+    predefined category. Omit both "po_ids" and "filter_status" to export all
+    purchase orders. Optionally provide "columns" to select/order a subset of
+    columns (see PO_EXPORT_COLUMNS for valid names) - if only PO-level columns
+    are selected, one row is written per PO; otherwise one row is written per
+    line item.
+
+    Example: POST /api/v1/purchase-orders/export/csv
+    Body: {"po_ids": [11880, 11881, 11882], "columns": ["PO ID", "Vendor", "Total Amount"]}
+
+    Returns a downloadable CSV file.
+    """
+    po_ids = request_data.po_ids
+
+    query = db.query(models.PurchaseOrder).options(
+        joinedload(models.PurchaseOrder.items)
+            .joinedload(models.PurchaseOrderItem.container_links)
+            .joinedload(models.PurchaseOrderItemContainer.container),
+        joinedload(models.PurchaseOrder.vendor),
+        joinedload(models.PurchaseOrder.customer),
+        joinedload(models.PurchaseOrder.channel),
+        joinedload(models.PurchaseOrder.comments),
+        joinedload(models.PurchaseOrder.items).joinedload(models.PurchaseOrderItem.comments),
+        joinedload(models.PurchaseOrder.comments)
+            .joinedload(models.PurchaseOrderComment.user)
     )
 
     if request_data.channel_id:
         try:
-            import uuid
-            base_q = base_q.filter(models.PurchaseOrder.channel_id == uuid.UUID(request_data.channel_id))
+            query = query.filter(models.PurchaseOrder.channel_id == uuid.UUID(request_data.channel_id))
         except ValueError:
             # Fallback: if it's not a UUID, try filtering by channel_order_id
-            base_q = base_q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{request_data.channel_id}%"))
-            
+            query = query.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{request_data.channel_id}%"))
+
     if getattr(request_data, 'channel_order_id', None):
-        base_q = base_q.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{request_data.channel_order_id}%"))
-            
+        query = query.filter(models.PurchaseOrder.channel_order_id.ilike(f"%{request_data.channel_order_id}%"))
+
     if request_data.vendor_id:
-        base_q = base_q.filter(models.PurchaseOrder.vendor_id == request_data.vendor_id)
-        
+        query = query.filter(models.PurchaseOrder.vendor_id == request_data.vendor_id)
+
     if request_data.customer_id:
         if request_data.customer_id == "00000000-0000-0000-0000-000000000000" or request_data.customer_id == "0":
-            base_q = base_q.filter(models.PurchaseOrder.customer_id.is_(None))
+            query = query.filter(models.PurchaseOrder.customer_id.is_(None))
         elif request_data.customer_id.isdigit():
-            base_q = base_q.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
+            query = query.join(models.Customer, models.PurchaseOrder.customer_id == models.Customer.id).filter(
                 models.Customer.sellercloud_customer_id == int(request_data.customer_id)
             )
         else:
-            base_q = base_q.filter(models.PurchaseOrder.customer_id == request_data.customer_id)
-            
+            query = query.filter(models.PurchaseOrder.customer_id == request_data.customer_id)
+
     if request_data.search:
         import re
-        from sqlalchemy import or_, cast, String
+        from sqlalchemy import cast, String
         escaped_search = re.escape(request_data.search)
         search_conditions = [
             models.PurchaseOrder.purchase_title.op('~*')(rf"\y{escaped_search}"),
@@ -3928,149 +3940,166 @@ def export_multiple_pos_csv(
         ]
         if request_data.search.isdigit():
             search_conditions.append(cast(models.PurchaseOrder.sellercloud_po_id, String).op('~*')(rf"\y{escaped_search}"))
-        
-        base_q = base_q.filter(or_(*search_conditions))
+
+        query = query.filter(or_(*search_conditions))
 
     if request_data.date_from:
-        base_q = base_q.filter(models.PurchaseOrder.date_ordered >= request_data.date_from)
+        query = query.filter(models.PurchaseOrder.date_ordered >= request_data.date_from)
     if request_data.date_to:
         date_to = request_data.date_to
         # If date_to has no time component (midnight), extend it to the end of the day
         if date_to.time() == datetime.min.time():
             from datetime import time
             date_to = datetime.combine(date_to.date(), time(23, 59, 59, 999999))
-        base_q = base_q.filter(models.PurchaseOrder.date_ordered <= date_to)
+        query = query.filter(models.PurchaseOrder.date_ordered <= date_to)
 
+    if po_ids:
+        sellercloud_ids = [i for i in po_ids if isinstance(i, int)]
+        uuid_ids = [i for i in po_ids if isinstance(i, uuid.UUID)]
+        query = query.filter(
+            or_(
+                models.PurchaseOrder.sellercloud_po_id.in_(sellercloud_ids) if sellercloud_ids else False,
+                models.PurchaseOrder.id.in_(uuid_ids) if uuid_ids else False,
+            )
+        )
+        pos = query.all()
+    elif request_data.filter_status:
+        from datetime import timezone
+        cutoff_10_days = datetime.now(timezone.utc) - timedelta(days=10)
+        today = datetime.now(timezone.utc).date()
 
-    if request_data.po_ids:
-        pos = base_q.filter(models.PurchaseOrder.sellercloud_po_id.in_(request_data.po_ids)).all()
-    else:
         status = request_data.filter_status
-        if not status or status.lower() == 'all':
-            pos = base_q.order_by(models.PurchaseOrder.created_on.desc()).all()
-        elif status == 'invoice_delayed':
-            pos = base_q.filter(
+        if not status or status.lower() == "all":
+            pos = query.order_by(models.PurchaseOrder.created_on.desc()).all()
+        elif status == "invoice_delayed":
+            pos = query.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.is_(None),
                     models.PurchaseOrder.created_on <= cutoff_10_days
                 )
             ).order_by(models.PurchaseOrder.created_on.asc()).all()
-        elif status == 'delivery_delayed':
-            q = base_q.filter(
+        elif status == "delivery_delayed":
+            candidates = query.filter(
                 and_(
                     models.PurchaseOrder.invoice_date.isnot(None),
                     models.PurchaseOrder.container_lead_time_days.isnot(None)
                 )
             ).all()
-            pos = [p for p in q if p.invoice_date and p.container_lead_time_days and (p.invoice_date.date() + timedelta(days=p.container_lead_time_days)) < today]
-        elif status == 'lefts_items':
-            q = base_q.join(models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id).distinct().all()
-            pos = []
-            for po in q:
-                po_model = PurchaseOrderOut.model_validate(po)
-                if po_model.total_qty_remaining and po_model.total_qty_remaining > 0:
-                    pos.append(po)
+            pos = [
+                p for p in candidates
+                if p.invoice_date and p.container_lead_time_days
+                and (p.invoice_date.date() + timedelta(days=p.container_lead_time_days)) < today
+            ]
+        elif status == "lefts_items":
+            candidates = query.join(
+                models.PurchaseOrderItem, models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id
+            ).distinct().all()
+            pos = [
+                p for p in candidates
+                if sum(item.qty_ordered - item.qty_received for item in p.items) > 0
+            ]
         else:
-            raise HTTPException(status_code=400, detail="Invalid filter_status")
+            raise HTTPException(status_code=400, detail="Invalid filter_status. Must be invoice_delayed, delivery_delayed, or lefts_items")
+    else:
+        pos = query.all()
 
     if not pos:
-        raise HTTPException(status_code=404, detail="No POs found")
+        raise HTTPException(status_code=404, detail="No POs found with provided criteria")
 
-    output = io.StringIO()
-    writer = csv.writer(output)
+    def lead_time_of(po):
+        return po.container_lead_time_days if po.container_lead_time_days is not None else (po.vendor.container_lead_time_days if po.vendor else "")
 
-    # Column mapping logic
-    def get_container_info(item):
-        if not getattr(item, 'container_links', None):
-            return "", ""
-        containers = [link.container for link in item.container_links if link.container]
-        if not containers:
-            return "", ""
+    def container_info_of(item):
+        containers = [link.container for link in (item.container_links or []) if link.container]
         name = ", ".join([c.container_name or "" for c in containers])
         eta = ", ".join([c.estimated_arrival_date.strftime('%Y-%m-%d') if getattr(c, 'estimated_arrival_date', None) else "" for c in containers])
         return name, eta
 
-    column_map = {
-        "PO ID": lambda p, i, c_name, c_eta: p.sellercloud_po_id,
-        "PO Title": lambda p, i, c_name, c_eta: p.purchase_title or "",
-        "Vendor": lambda p, i, c_name, c_eta: p.vendor.name if p.vendor else "",
-        "Customer Name": lambda p, i, c_name, c_eta: f"{p.customer.first_name or ''} {p.customer.last_name or ''}".strip() if p.customer else "",
-        "Channel": lambda p, i, c_name, c_eta: p.channel.name if p.channel else "",
-        "Channel ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
-        "Channel Order ID": lambda p, i, c_name, c_eta: p.channel_order_id or "",
-        "Warehouse": lambda p, i, c_name, c_eta: p.warehouse.name if p.warehouse else "",
-        "Status Code": lambda p, i, c_name, c_eta: p.purchase_order_status_code or "",
-        "Receiving Status": lambda p, i, c_name, c_eta: p.receiving_status_code or "",
-        "Created On": lambda p, i, c_name, c_eta: p.created_on.strftime('%Y-%m-%d') if p.created_on else "",
-        "Date Ordered": lambda p, i, c_name, c_eta: p.date_ordered.strftime('%Y-%m-%d') if p.date_ordered else "",
-        "Expected Delivery": lambda p, i, c_name, c_eta: p.expected_delivery_date.strftime('%Y-%m-%d') if p.expected_delivery_date else "",
-        "Invoice Date": lambda p, i, c_name, c_eta: p.invoice_date.strftime('%Y-%m-%d') if p.invoice_date else "",
-        "Lead Time (days)": lambda p, i, c_name, c_eta: p.container_lead_time_days if p.container_lead_time_days is not None else (p.vendor.container_lead_time_days if p.vendor else ""),
-        "Total Amount": lambda p, i, c_name, c_eta: p.total_amount or 0,
-        "Currency": lambda p, i, c_name, c_eta: p.currency or "USD",
-        "Item ID": lambda p, i, c_name, c_eta: i.sellercloud_item_id or "" if i else "",
-        "SKU": lambda p, i, c_name, c_eta: i.sku or "" if i else "",
-        "Product Name": lambda p, i, c_name, c_eta: i.product_name or "" if i else "",
-        "Qty Ordered": lambda p, i, c_name, c_eta: i.qty_ordered or 0 if i else "",
-        "Qty Received": lambda p, i, c_name, c_eta: i.qty_received or 0 if i else "",
-        "Qty in Container": lambda p, i, c_name, c_eta: i.qty_in_container or 0 if i else "",
-        "Unit Price": lambda p, i, c_name, c_eta: i.unit_price or 0 if i else "",
-        "Cases Ordered": lambda p, i, c_name, c_eta: i.qty_cases_ordered or 0 if i else "",
-        "Units per Case": lambda p, i, c_name, c_eta: i.qty_units_per_case or 0 if i else "",
-        "Case Price": lambda p, i, c_name, c_eta: i.case_price or 0 if i else "",
-        "Item Expected Delivery": lambda p, i, c_name, c_eta: i.expected_delivery_date.strftime('%Y-%m-%d') if i and i.expected_delivery_date else "",
-        "Container Name": lambda p, i, c_name, c_eta: c_name,
-        "Container ETA": lambda p, i, c_name, c_eta: c_eta,
-        "Notes": lambda p, i, c_name, c_eta: p.notes or "",
-        "Comments": lambda p, i, c_name, c_eta: " | ".join(
-            [f"[{c.created_at.strftime('%Y-%m-%d')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in p.comments]
-        ) if getattr(p, "comments", None) else "",
-        "Item Comments": lambda p, i, c_name, c_eta: " | ".join(
-            [f"[{c.created_at.strftime('%Y-%m-%d')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in i.comments]
-        ) if i and getattr(i, "comments", None) else ""
+    # column name -> (is_item_level, extractor(po, item))
+    PO_EXPORT_COLUMNS = {
+        "PO ID": (False, lambda po, item: po.sellercloud_po_id),
+        "PO Title": (False, lambda po, item: po.purchase_title or ""),
+        "Vendor": (False, lambda po, item: po.vendor.name if po.vendor else ""),
+        "Customer Name": (False, lambda po, item: f"{po.customer.first_name or ''} {po.customer.last_name or ''}".strip() if po.customer else ""),
+        "Channel": (False, lambda po, item: po.channel.name if po.channel else ""),
+        "Channel ID": (False, lambda po, item: po.channel_order_id or ""),
+        "Channel Order ID": (False, lambda po, item: po.channel_order_id or ""),
+        "Warehouse": (False, lambda po, item: po.warehouse.name if po.warehouse else ""),
+        "Status Code": (False, lambda po, item: po.purchase_order_status_code or ""),
+        "Receiving Status": (False, lambda po, item: po.receiving_status_code or ""),
+        "Created On": (False, lambda po, item: po.created_on.strftime('%Y-%m-%d') if po.created_on else ""),
+        "Date Ordered": (False, lambda po, item: po.date_ordered.strftime('%Y-%m-%d') if po.date_ordered else ""),
+        "Expected Delivery": (False, lambda po, item: po.expected_delivery_date.strftime('%Y-%m-%d') if po.expected_delivery_date else ""),
+        "Invoice Date": (False, lambda po, item: po.invoice_date.strftime('%Y-%m-%d') if po.invoice_date else ""),
+        "Lead Time (days)": (False, lambda po, item: lead_time_of(po)),
+        "Total Amount": (False, lambda po, item: po.total_amount or 0),
+        "Currency": (False, lambda po, item: po.currency or "USD"),
+        "Item ID": (True, lambda po, item: item.sellercloud_item_id or ""),
+        "SKU": (True, lambda po, item: item.sku or ""),
+        "Product Name": (True, lambda po, item: item.product_name or ""),
+        "Qty Ordered": (True, lambda po, item: item.qty_ordered or 0),
+        "Qty Received": (True, lambda po, item: item.qty_received or 0),
+        "Qty in Container": (True, lambda po, item: item.qty_in_container or 0),
+        "Unit Price": (True, lambda po, item: item.unit_price or 0),
+        "Cases Ordered": (True, lambda po, item: item.qty_cases_ordered or 0),
+        "Units per Case": (True, lambda po, item: item.qty_units_per_case or 0),
+        "Case Price": (True, lambda po, item: item.case_price or 0),
+        "Item Expected Delivery": (True, lambda po, item: item.expected_delivery_date.strftime('%Y-%m-%d') if item.expected_delivery_date else ""),
+        "Container Name": (True, lambda po, item: container_info_of(item)[0]),
+        "Container ETA": (True, lambda po, item: container_info_of(item)[1]),
+        "Notes": (False, lambda po, item: po.notes or ""),
+        "Comments": (False, lambda po, item: " | ".join(
+            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in po.comments]
+        ) if getattr(po, "comments", None) else ""),
+        "Item Comments": (True, lambda po, item: " | ".join(
+            [f"[{c.created_at.strftime('%Y-%m-%d %H:%M')}] {c.user.full_name or c.user.email if c.user else 'Unknown'}: {c.comment}" for c in item.comments]
+        ) if item and getattr(item, "comments", None) else ""),
     }
 
-    all_cols = list(column_map.keys())
-    selected_cols = request_data.columns if request_data.columns else all_cols
-    
-    # Filter out invalid columns
-    selected_cols = [c for c in selected_cols if c in column_map]
-    
-    writer.writerow(selected_cols)
-    
-    item_specific_cols = {
-        "Item ID", "SKU", "Product Name", "Qty Ordered", "Qty Received", 
-        "Qty in Container", "Unit Price", "Cases Ordered", "Units per Case", 
-        "Case Price", "Item Expected Delivery", "Container Name", "Container ETA"
-    }
-    
-    requires_items = any(col in item_specific_cols for col in selected_cols)
-    
+    if request_data.columns:
+        unknown = [c for c in request_data.columns if c not in PO_EXPORT_COLUMNS]
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Unknown column(s): {unknown}. Valid columns: {list(PO_EXPORT_COLUMNS.keys())}")
+        selected_columns = request_data.columns
+    else:
+        selected_columns = list(PO_EXPORT_COLUMNS.keys())
+
+    needs_item_rows = any(PO_EXPORT_COLUMNS[c][0] for c in selected_columns)
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(selected_columns)
+
     for po in pos:
-        if not po.items or not requires_items:
+        if not po.items or not needs_item_rows:
             # Only output one row per PO if no item-level data is requested (or if PO has no items)
-            row = [column_map[col](po, None, "", "") for col in selected_cols]
+            row = [
+                "" if PO_EXPORT_COLUMNS[c][0] else PO_EXPORT_COLUMNS[c][1](po, None)
+                for c in selected_columns
+            ]
             writer.writerow(row)
         else:
             seen_rows = set()
             first_row_written = False
-            for idx, item in enumerate(po.items):
-                c_name, c_eta = get_container_info(item)
-                row = [column_map[col](po, item, c_name, c_eta) for col in selected_cols]
-                
+            for item in po.items:
+                row = [PO_EXPORT_COLUMNS[c][1](po, item) for c in selected_columns]
+
                 row_tuple = tuple(row)
                 if row_tuple not in seen_rows:
                     seen_rows.add(row_tuple)
-                    
+
                     # Blank out Notes for subsequent rows to avoid duplication
-                    if first_row_written and "Notes" in selected_cols:
-                        notes_idx = selected_cols.index("Notes")
-                        row[notes_idx] = ""
-                        
+                    if first_row_written and "Notes" in selected_columns:
+                        row[selected_columns.index("Notes")] = ""
+
                     writer.writerow(row)
                     first_row_written = True
 
+    # Prepare response
     output.seek(0)
+    filename = f"POs_{len(pos)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",

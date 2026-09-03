@@ -12,12 +12,29 @@ CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email           VARCHAR(255) UNIQUE NOT NULL,
     hashed_password VARCHAR(255) NOT NULL,
+    first_name      VARCHAR(120),
+    last_name       VARCHAR(120),
     full_name       VARCHAR(255),
     role            VARCHAR(50) NOT NULL DEFAULT 'user', -- user | admin
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS po_columns JSON DEFAULT '{
+    "id": true, "orderId": true, "channel_order_id": true, "status": true,
+    "delay_reason": true, "commentsCount": true, "creationDate": true,
+    "vendorName": true, "customerName": true, "items": true, "orderedQty": true,
+    "invoiceDetails": true, "invoiceDelayStatus": true, "expected_delivery_date": true,
+    "containerIds": true, "actions": true
+}'::json;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS container_columns JSON DEFAULT '{
+    "id": true, "name": true, "warehouse_name": true, "total_items": true,
+    "total_qty_in_container": true, "total_qty_received": true, "arrivalDate": true,
+    "received_date": true, "actions": true
+}'::json;
 
 -- ---------------------------------------------------------
 -- 2. Companies (SellerCloud "Companies" - the entity that
@@ -62,6 +79,18 @@ CREATE TABLE IF NOT EXISTS vendors (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS vendor_id UUID REFERENCES vendors(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS country VARCHAR(120);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS container_lead_time_days INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_new_user BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_trucker_email BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_invoice_delayed BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_shipment_delayed BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMPTZ;
+
 -- ---------------------------------------------------------
 -- 4. Customers (SellerCloud "Customers" tied to Orders,
 --    linked to a Company)
@@ -92,12 +121,30 @@ CREATE TABLE IF NOT EXISTS customers (
 -- ---------------------------------------------------------
 -- 5. Purchase Orders
 -- ---------------------------------------------------------
+-- ---------------------------------------------------------
+-- 4b. Warehouses (SellerCloud Warehouses)
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS warehouses (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sellercloud_warehouse_id   INTEGER UNIQUE,
+    name                       VARCHAR(255),
+    is_default                 BOOLEAN DEFAULT FALSE,
+    warehouse_type             VARCHAR(50),
+    is_sellable                BOOLEAN DEFAULT TRUE,
+    is_active                  BOOLEAN DEFAULT TRUE,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+
 CREATE TABLE IF NOT EXISTS purchase_orders (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sellercloud_po_id      INTEGER UNIQUE,
     purchase_title         VARCHAR(255),          -- SellerCloud "PurchaseTitle" (there's no separate PO number field)
     company_id             UUID REFERENCES companies(id) ON DELETE SET NULL,
     vendor_id               UUID REFERENCES vendors(id) ON DELETE SET NULL,
+    customer_id             UUID REFERENCES customers(id) ON DELETE SET NULL,
     purchase_order_status_code INTEGER,           -- raw SellerCloud "PurchaseOrderStatus" enum int
     receiving_status_code       INTEGER,          -- raw SellerCloud "ReceivingStatus" enum int
     status_label                 VARCHAR(50),     -- human-readable, filled in once you map the enum values (see README)
@@ -105,9 +152,12 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     date_ordered                  TIMESTAMPTZ,     -- SellerCloud "DateOrdered"
     expected_delivery_date         TIMESTAMPTZ,
     invoice_date                    TIMESTAMPTZ,   -- from Invoices[0].InvoiceDate
+    container_lead_time_days        INTEGER,       -- Days from invoice date to container arrival, set per PO
     total_amount                    NUMERIC(14,2),
     currency                        VARCHAR(10) DEFAULT 'USD',
     notes                            TEXT,
+    status                           VARCHAR(50),
+    warehouse_id                     UUID REFERENCES warehouses(id) ON DELETE SET NULL,
     raw_json                        JSONB,
     created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -115,7 +165,44 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
 
 CREATE INDEX IF NOT EXISTS idx_po_vendor ON purchase_orders(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_po_company ON purchase_orders(company_id);
-CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
+CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(purchase_order_status_code);
+
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status VARCHAR(50);
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE SET NULL;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason TEXT;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason_updated_by_id UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_reason_updated_at TIMESTAMPTZ;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delay_notification_sent BOOLEAN DEFAULT FALSE;
+
+-- ---------------------------------------------------------
+-- 5b. Purchase Order Comments
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS purchase_order_comments (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    purchase_order_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+    parent_id         UUID REFERENCES purchase_order_comments(id) ON DELETE CASCADE,
+    comment           TEXT NOT NULL,
+    is_edited         BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE purchase_order_comments ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES purchase_order_comments(id) ON DELETE CASCADE;
+ALTER TABLE purchase_order_comments ADD COLUMN IF NOT EXISTS is_edited BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_po_comments_po ON purchase_order_comments(purchase_order_id);
+
+CREATE TABLE IF NOT EXISTS purchase_order_comment_attachments (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    comment_id    UUID NOT NULL REFERENCES purchase_order_comments(id) ON DELETE CASCADE,
+    file_name     VARCHAR(255) NOT NULL,
+    file_url      TEXT NOT NULL,
+    content_type  VARCHAR(100),
+    size          INTEGER,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_comment_attachments_comment ON purchase_order_comment_attachments(comment_id);
 
 -- ---------------------------------------------------------
 -- 6. Purchase Order Line Items
@@ -126,6 +213,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
     sellercloud_item_id     INTEGER,               -- SellerCloud Items[].ID (a.k.a. "POItemID")
     sku                    VARCHAR(120),
     product_name            VARCHAR(255),
+    image_url               VARCHAR(500),
     qty_ordered               INTEGER DEFAULT 0,   -- SellerCloud "QtyOrdered"
     qty_received              INTEGER DEFAULT 0,   -- SellerCloud "QtyReceived"
     qty_in_container          INTEGER DEFAULT 0,   -- SellerCloud "QtyInContainer" - only present on the full PO detail call, not the list view
@@ -143,10 +231,38 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
 CREATE INDEX IF NOT EXISTS idx_poitems_po ON purchase_order_items(purchase_order_id);
 
 -- ---------------------------------------------------------
+-- 6a. Purchase Order Item Comments
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS purchase_order_item_comments (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    purchase_order_item_id  UUID NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+    user_id                 UUID REFERENCES users(id) ON DELETE SET NULL,
+    parent_id               UUID REFERENCES purchase_order_item_comments(id) ON DELETE CASCADE,
+    comment                 TEXT NOT NULL,
+    is_edited               BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_item_comments_item ON purchase_order_item_comments(purchase_order_item_id);
+
+CREATE TABLE IF NOT EXISTS purchase_order_item_comment_attachments (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    comment_id    UUID NOT NULL REFERENCES purchase_order_item_comments(id) ON DELETE CASCADE,
+    file_name     VARCHAR(255) NOT NULL,
+    file_url      TEXT NOT NULL,
+    content_type  VARCHAR(100),
+    size          INTEGER,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_item_comment_attachments_comment ON purchase_order_item_comment_attachments(comment_id);
+
+-- ---------------------------------------------------------
 -- 6b. Per-vendor container lead time (days from payment/order
 --     to first container arrival) - used to flag overdue POs
 -- ---------------------------------------------------------
 ALTER TABLE vendors ADD COLUMN IF NOT EXISTS container_lead_time_days INTEGER;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255);
 
 -- ---------------------------------------------------------
 -- 6c. Shipping containers (SellerCloud ShippingContainers)
@@ -158,16 +274,92 @@ CREATE TABLE IF NOT EXISTS shipping_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sellercloud_container_id   INTEGER UNIQUE,
     container_name             VARCHAR(255),
+    estimated_arrival_date     TIMESTAMPTZ,
+    received_date              TIMESTAMPTZ,
     raw_json                   JSONB,
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS warehouse_id UUID REFERENCES warehouses(id) ON DELETE SET NULL;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS date_dropped_off TIMESTAMPTZ;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS door VARCHAR(50);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS date_emptied TIMESTAMPTZ;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS unloaded_by VARCHAR(255);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS unload_cost NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS container_shipping_cost NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS drayage_cost NUMERIC(14,2);
+-- container_cost_drayage renamed to container_shipping_cost; drayage_cost added as a new column (see db_migration_fix.sql)
+
+-- ---------------------------------------------------------
+-- 6d. Shipping container tracking (AllWays container tracking)
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shipping_container_tracking (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shipping_container_id UUID NOT NULL UNIQUE REFERENCES shipping_containers(id) ON DELETE CASCADE,
+    container_number      VARCHAR(255) NOT NULL,
+
+    origin_port           VARCHAR(255),
+    destination_port      VARCHAR(255),
+    carrier               VARCHAR(255),
+    vessel_and_voyage     VARCHAR(255),
+    etd                   TIMESTAMPTZ,
+    eta                   TIMESTAMPTZ,
+    status                VARCHAR(100),
+
+    latitude              NUMERIC(10, 6),
+    longitude             NUMERIC(10, 6),
+    location_status       VARCHAR(100),
+
+    raw_response          JSONB,
+    error_message         TEXT,
+    last_tracked_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_container_tracking_container_id
+    ON shipping_container_tracking (shipping_container_id);
+CREATE INDEX IF NOT EXISTS idx_shipping_container_tracking_container_number
+    ON shipping_container_tracking (container_number);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS customs_duty_misc NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS per_diem NUMERIC(14,2);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS country_of_origin VARCHAR(120);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS receiving_closure_notes TEXT;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS factory_credit_needed TEXT;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS trucker_email VARCHAR(255);
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS last_notified_trucker_email VARCHAR(255);
+
+CREATE TABLE IF NOT EXISTS logistics_companies (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name          VARCHAR(255) NOT NULL UNIQUE,
+    primary_email VARCHAR(255),
+    cc_email      VARCHAR(255),
+    created_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_logistics_companies_name ON logistics_companies (name);
+
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS logistics_company_id UUID REFERENCES logistics_companies(id) ON DELETE SET NULL;
+ALTER TABLE shipping_containers ADD COLUMN IF NOT EXISTS trucking_company VARCHAR(255);
+
+CREATE TABLE IF NOT EXISTS shipping_container_attachments (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shipping_container_id    UUID NOT NULL REFERENCES shipping_containers(id) ON DELETE CASCADE,
+    file_name                 VARCHAR(255) NOT NULL,
+    file_url                  TEXT NOT NULL,
+    content_type              VARCHAR(255),
+    size                      INTEGER,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_container_attachments_container ON shipping_container_attachments(shipping_container_id);
 
 CREATE TABLE IF NOT EXISTS purchase_order_item_containers (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     purchase_order_item_id     UUID NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
     shipping_container_id       UUID NOT NULL REFERENCES shipping_containers(id) ON DELETE CASCADE,
     qty_in_container             INTEGER DEFAULT 0,
+    qty_received_container       INTEGER DEFAULT 0,
     raw_json                     JSONB,
     created_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -184,3 +376,18 @@ CREATE TABLE IF NOT EXISTS sync_logs (
     started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at    TIMESTAMPTZ
 );
+
+-- ---------------------------------------------------------
+-- 8. User activity logs (login, sync, create, etc.)
+-- ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_activity_logs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+    action        VARCHAR(50) NOT NULL,   -- e.g. LOGIN, SYNC_PO, CREATE_USER
+    entity_type   VARCHAR(50),            -- e.g. PURCHASE_ORDER, CONTAINER
+    entity_id     VARCHAR(255),
+    details       JSONB,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON user_activity_logs(user_id);

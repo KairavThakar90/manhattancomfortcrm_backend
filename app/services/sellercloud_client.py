@@ -336,7 +336,8 @@ class SellerCloudClient:
             "ContainerName": payload.get("ContainerName"),
             "EstimatedArrivalDate": payload.get("EstimatedArrivalDate"),
             "ShippedOn": payload.get("ReceivedDate"),  # map our ReceivedDate to ShippedOn
-            "ShippingStatus": 1,  # 1 = NotArrived (default for new containers)
+            "ShippingStatus": payload.get("ShippingStatus", 1),  # 1 = NotArrived (default for new containers)
+            "ReceiveWarehouseID": payload.get("ReceiveWarehouseID"),
         }
         # Remove None values
         create_payload = {k: v for k, v in create_payload.items() if v is not None}
