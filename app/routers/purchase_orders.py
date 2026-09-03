@@ -1229,23 +1229,49 @@ def update_purchase_order(
 
     # 6. Update / Add / Delete Items if provided
     if po_data.items is not None:
+        # Pre-fetch SellerCloud detail if existing local items are missing sellercloud_item_id
         existing_items = db.query(models.PurchaseOrderItem).filter(
             models.PurchaseOrderItem.purchase_order_id == po.id
         ).all()
+
+        if po.sellercloud_po_id and any(not it.sellercloud_item_id for it in existing_items):
+            try:
+                from app.services.sync_service import _upsert_items
+                sc_detail = sellercloud_client.get_purchase_order_detail(po.sellercloud_po_id)
+                if sc_detail and sc_detail.get("Items"):
+                    _upsert_items(db, po.id, sc_detail.get("Items"))
+                    existing_items = db.query(models.PurchaseOrderItem).filter(
+                        models.PurchaseOrderItem.purchase_order_id == po.id
+                    ).all()
+            except Exception as pre_sync_e:
+                print(f"Pre-update sync of PO {po.sellercloud_po_id} items failed: {pre_sync_e}")
 
         retained_item_ids = set()
         sc_items_payload = []
 
         for it_data in po_data.items:
             clean_sku = it_data.sku.strip() if it_data.sku else None
-            # Find item in existing list
+            # Robust lookup of existing item:
             local_item = None
-            if it_data.id:
-                local_item = next((it for it in existing_items if it.id == it_data.id), None)
-            elif it_data.sellercloud_item_id:
+            
+            # 1. Try matching by local DB UUID or SellerCloud integer ID if it_data.id is provided and valid
+            if it_data.id is not None:
+                id_raw = str(it_data.id).strip()
+                if id_raw and id_raw != "0":
+                    try:
+                        target_uuid = uuid.UUID(id_raw)
+                        local_item = next((it for it in existing_items if it.id == target_uuid), None)
+                    except ValueError:
+                        if id_raw.isdigit() and int(id_raw) > 0:
+                            local_item = next((it for it in existing_items if it.sellercloud_item_id == int(id_raw)), None)
+
+            # 2. Try matching by sellercloud_item_id if not yet matched
+            if not local_item and it_data.sellercloud_item_id and it_data.sellercloud_item_id > 0:
                 local_item = next((it for it in existing_items if it.sellercloud_item_id == it_data.sellercloud_item_id), None)
-            elif clean_sku:
-                local_item = next((it for it in existing_items if it.sku == clean_sku), None)
+
+            # 3. Try matching by SKU (case-insensitive) if not yet matched
+            if not local_item and clean_sku:
+                local_item = next((it for it in existing_items if (it.sku or "").strip().lower() == clean_sku.lower()), None)
 
             if local_item:
                 retained_item_ids.add(local_item.id)
@@ -1263,7 +1289,7 @@ def update_purchase_order(
                 if it_data.expected_delivery_date is not None:
                     local_item.expected_delivery_date = it_data.expected_delivery_date
 
-                if local_item.sellercloud_item_id:
+                if local_item.sellercloud_item_id and local_item.sellercloud_item_id > 0:
                     sc_item_entry = {
                         "ID": local_item.sellercloud_item_id,
                         "QtyUnitsOrdered": local_item.qty_ordered,
@@ -1338,7 +1364,7 @@ def update_purchase_order(
                     detail=f"Cannot remove item '{rem_it.sku}' from PO: Goods have already been received ({rem_it.qty_received} units received)."
                 )
 
-            if rem_it.sellercloud_item_id:
+            if rem_it.sellercloud_item_id and rem_it.sellercloud_item_id > 0:
                 sc_item_ids_to_delete.append(rem_it.sellercloud_item_id)
 
         # Delete removed items in SellerCloud
