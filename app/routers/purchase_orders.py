@@ -1229,12 +1229,12 @@ def update_purchase_order(
 
     # 6. Update / Add / Delete Items if provided
     if po_data.items is not None:
-        # Pre-fetch SellerCloud detail if existing local items are missing sellercloud_item_id
+        # Ensure latest SellerCloud items and their IDs are synced before updating
         existing_items = db.query(models.PurchaseOrderItem).filter(
             models.PurchaseOrderItem.purchase_order_id == po.id
         ).all()
 
-        if po.sellercloud_po_id and any(not it.sellercloud_item_id for it in existing_items):
+        if po.sellercloud_po_id:
             try:
                 from app.services.sync_service import _upsert_items
                 sc_detail = sellercloud_client.get_purchase_order_detail(po.sellercloud_po_id)
