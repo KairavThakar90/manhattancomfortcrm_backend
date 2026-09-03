@@ -1228,7 +1228,7 @@ class UserActivityLogOut(BaseModel):
     entity_type: Optional[str] = None
     entity_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
     
     # Optional nested user details for display
     user: Optional[UserOut] = None
