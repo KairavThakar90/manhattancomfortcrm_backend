@@ -1238,7 +1238,18 @@ def update_purchase_order(
             try:
                 from app.services.sync_service import _upsert_items
                 sc_detail = sellercloud_client.get_purchase_order_detail(po.sellercloud_po_id)
-                if sc_detail and sc_detail.get("Items"):
+                if sc_detail and sc_detail.get("Items") is not None:
+                    sc_item_ids = {it.get("ID") for it in sc_detail.get("Items") if it.get("ID")}
+                    # Clean up local items that no longer exist in SellerCloud
+                    if sc_item_ids:
+                        stale_items = db.query(models.PurchaseOrderItem).filter(
+                            models.PurchaseOrderItem.purchase_order_id == po.id,
+                            models.PurchaseOrderItem.sellercloud_item_id.isnot(None),
+                            models.PurchaseOrderItem.sellercloud_item_id.notin_(sc_item_ids)
+                        ).all()
+                        for st_it in stale_items:
+                            db.delete(st_it)
+                        db.flush()
                     _upsert_items(db, po.id, sc_detail.get("Items"))
                     existing_items = db.query(models.PurchaseOrderItem).filter(
                         models.PurchaseOrderItem.purchase_order_id == po.id
@@ -1381,7 +1392,8 @@ def update_purchase_order(
                             sc_err = err_text
                     except Exception:
                         pass
-                raise HTTPException(status_code=400, detail=f"SellerCloud Error deleting removed PO items: {sc_err}")
+                if "does not contain" not in sc_err.lower() and "not exist" not in sc_err.lower():
+                    raise HTTPException(status_code=400, detail=f"SellerCloud Error deleting removed PO items: {sc_err}")
 
         # Delete removed items in local DB
         for rem_it in removed_items:
@@ -1417,7 +1429,27 @@ def update_purchase_order(
                             sc_err = err_text
                     except Exception:
                         pass
-                raise HTTPException(status_code=400, detail=f"SellerCloud Error adding new PO items: {sc_err}")
+
+                # If SellerCloud rejected because a new SKU does not exist yet in Catalog, auto-create in SC and retry!
+                if "invalid product" in sc_err.lower() or "cannot find product" in sc_err.lower() or "not found" in sc_err.lower():
+                    try:
+                        comp_sc_id = po.company.sellercloud_company_id if po.company else 255
+                        vend_sc_id = po.vendor.sellercloud_vendor_id if po.vendor else None
+                        for add_it in sc_items_to_add:
+                            p_sku = add_it.get("ProductID")
+                            if p_sku:
+                                sellercloud_client.create_product(
+                                    sku=p_sku,
+                                    product_name=p_sku,
+                                    company_id=comp_sc_id or 255,
+                                    vendor_id=vend_sc_id,
+                                    site_cost=float(add_it.get("UnitPrice", 0.0))
+                                )
+                        sellercloud_client.add_purchase_order_items(po.sellercloud_po_id, sc_items_to_add)
+                    except Exception as retry_e:
+                        raise HTTPException(status_code=400, detail=f"SellerCloud Error adding new PO items: {sc_err}")
+                else:
+                    raise HTTPException(status_code=400, detail=f"SellerCloud Error adding new PO items: {sc_err}")
 
         # Re-sync detail from SellerCloud to assign SellerCloud item IDs for any newly added items
         if po.sellercloud_po_id and (sc_items_to_update or sc_items_to_add):
